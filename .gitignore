@@ -1,0 +1,27 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.egg-info/
+
+# Local SQLite databases created during manual/dev runs
+*.db
+*.db-shm
+*.db-wal
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+*.swp
+
+# Node (desktop/ has its own, but ignore stray installs at the root too)
+node_modules/
+
+# Rust (desktop/src-tauri/ has its own, kept here for safety)
+target/

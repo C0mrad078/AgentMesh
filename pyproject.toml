@@ -1,0 +1,52 @@
+[project]
+name = "orchestrator-core"
+version = "0.1.0"
+description = "Orquestrador - autonomous multi-AI coordination core"
+requires-python = ">=3.12"
+dependencies = [
+    "aiosqlite>=0.20.0",
+    "pydantic>=2.7.0",
+    "platformdirs>=4.2.0",
+    "keyring>=25.2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2.0",
+    "pytest-asyncio>=0.23.7",
+    "pytest-cov>=5.0.0",
+    "ruff>=0.5.0",
+    "mypy>=1.10.0",
+]
+
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["core*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests/python", "tests/integration", "tests/smoke"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["core", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC"]
+# UP042: this project intentionally uses `class X(str, Enum)` (not StrEnum) so
+# every enum is both a plain str and JSON-serializable the same way across
+# pydantic models and the bridge protocol.
+ignore = ["E501", "UP042", "ASYNC109"]
+
+[tool.mypy]
+python_version = "3.12"
+packages = ["core"]
+ignore_missing_imports = true
+warn_unused_ignores = true
+disallow_untyped_defs = false

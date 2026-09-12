@@ -96,7 +96,7 @@ from core.orchestrator.planner import AIPlanner, Planner
 from core.orchestrator.router import Router
 from core.orchestrator.verifier import Verifier
 from core.projects.service import ProjectService
-from core.providers.base import ProviderAdapter
+from core.providers.base import ProviderAdapter, ProviderConnectionState
 from core.providers.circuit_breaker import CircuitBreaker
 from core.providers.credentials import (
     SUPPORTED_PROVIDERS,
@@ -107,6 +107,7 @@ from core.providers.credentials import (
 )
 from core.providers.health import ProviderHealthMonitor
 from core.providers.pool import ProviderPool
+from core.providers.provider_manager import ProviderManager
 from core.providers.registry import DEFAULT_MODELS, ModelRegistry
 from core.security.audit import AuditLogger
 from core.security.secret_store import SecretStore, create_secret_store
@@ -128,6 +129,7 @@ class BridgeContext:
     memory_store: SqliteMemoryStore
     engine: ExecutionEngine
     provider_pool: ProviderPool
+    provider_manager: ProviderManager
     health_monitor: ProviderHealthMonitor
     model_registry: ModelRegistry
     prompt_registry: PromptRegistry
@@ -189,6 +191,7 @@ async def build_context(
     orchestration_event_sink=None,
     provider_overrides: dict[str, ProviderAdapter] | None = None,
     secret_store: SecretStore | None = None,
+    detect_cli_providers: bool = False,
 ) -> BridgeContext:
     db = Database(db_path)
     await db.connect()
@@ -264,6 +267,25 @@ async def build_context(
     for adapter in (provider_overrides or {}).values():
         provider_pool.register(adapter)
 
+    provider_manager = ProviderManager()
+    if detect_cli_providers:
+        # CLI providers need no API key to configure -- their auth lives
+        # entirely in the CLI's own store (spec §12 "detecção automática no
+        # startup"). Only a genuinely CONNECTED one is registered, so the
+        # Router never routes to a CLI that turns out to be installed but
+        # not logged in; `providers.cli.status.list` still reports every
+        # state (including not-installed/disconnected) for the settings UI.
+        #
+        # Off by default: this spawns real `--version`/login-status
+        # subprocesses per CLI, which is exactly right once per real app
+        # startup but would make every test calling `build_context` slow
+        # and dependent on what happens to be installed on the machine
+        # running the suite. Only `core.bridge.main` (the real sidecar
+        # entrypoint) opts in.
+        for cli_name, status in (await provider_manager.list_cli_statuses()).items():
+            if status.state == ProviderConnectionState.CONNECTED:
+                provider_pool.register(provider_manager.cli_adapter(cli_name))
+
     health_monitor = ProviderHealthMonitor(CircuitBreaker())
     health_monitor.on_change(make_provider_health_sink(provider_health_repo))
 
@@ -332,6 +354,7 @@ async def build_context(
         memory_store=memory_store,
         engine=engine,
         provider_pool=provider_pool,
+        provider_manager=provider_manager,
         health_monitor=health_monitor,
         model_registry=model_registry,
         prompt_registry=prompt_registry,

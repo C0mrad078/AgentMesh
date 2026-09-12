@@ -139,6 +139,21 @@ export interface ProviderInfo {
   health: ProviderHealthStatus;
 }
 
+// --- Stage 5: CLI-wrapped providers (Codex CLI, Claude Code CLI, Gemini CLI) --
+
+export type CliProviderName = "codex_cli" | "claude_code_cli" | "gemini_cli";
+
+export type ProviderConnectionState = "connected" | "disconnected" | "not_installed" | "error";
+
+export interface CliProviderStatus {
+  access_method: "cli";
+  state: ProviderConnectionState;
+  version: string | null;
+  auth_method: string | null;
+  model: string | null;
+  detail: string | null;
+}
+
 export interface ModelInfo {
   provider: string;
   model_id: string;

@@ -68,8 +68,12 @@ _TRUNCATION_MARKER = "\n...[output truncated by the Orquestrador's output size l
 #: so there is nothing sensitive to accidentally forward here; the
 #: allowlist exists anyway as defense in depth against a future variable
 #: being added carelessly to the *parent* process's own environment.
+#: `USER`/`USERNAME` were added after a real, live-verified finding: the
+#: Claude Code CLI's own Keychain-based credential lookup depends on it --
+#: without it, `claude auth status` reports `loggedIn: false` even for an
+#: already-authenticated account (see `core.providers.claude_code_cli_provider`).
 _INHERITED_ENV_VARS = (
-    "PATH", "HOME", "USERPROFILE", "TEMP", "TMP", "TMPDIR", "LANG", "LC_ALL",
+    "PATH", "HOME", "USER", "USERNAME", "USERPROFILE", "TEMP", "TMP", "TMPDIR", "LANG", "LC_ALL",
     "SYSTEMROOT", "COMSPEC", "PATHEXT", "APPDATA", "LOCALAPPDATA",
 )
 
@@ -149,32 +153,58 @@ async def _exec(
     cancel_event: asyncio.Event | None,
     max_stdout_bytes: int,
     max_stderr_bytes: int,
+    stdin_data: bytes | None = None,
 ) -> RunResult:
     resolved_cwd = str(cwd) if cwd is not None else None
     resolved_env = _minimal_env(env)
+    # DEVNULL by default (never inherit the parent's stdin -- in production
+    # that is the Rust<->Python JSON-lines bridge pipe); a PIPE is only
+    # opened when a caller explicitly has data to send (e.g. a CLI provider
+    # sending a large prompt that would exceed an OS argv-length limit).
+    stdin_kind = asyncio.subprocess.PIPE if stdin_data is not None else asyncio.subprocess.DEVNULL
     try:
         if is_windows():
             process = await asyncio.create_subprocess_exec(
                 *argv, cwd=resolved_cwd, env=resolved_env,
+                stdin=stdin_kind,
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
                 creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,  # type: ignore[attr-defined]
             )
         else:
             process = await asyncio.create_subprocess_exec(
                 *argv, cwd=resolved_cwd, env=resolved_env,
+                stdin=stdin_kind,
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
                 start_new_session=True,  # own process group, for tree-kill
             )
     except FileNotFoundError as exc:
         raise ToolDeniedError(f"Executable not found: {argv[0]!r}") from exc
 
+    async def _write_stdin() -> None:
+        if stdin_data is None:
+            return
+        assert process.stdin is not None
+        try:
+            process.stdin.write(stdin_data)
+            await process.stdin.drain()
+        except (BrokenPipeError, ConnectionResetError):
+            pass  # child exited/closed its side before reading everything
+        finally:
+            process.stdin.close()
+
     async def _collect() -> tuple[bytes, bytes]:
         assert process.stdout is not None
         assert process.stderr is not None
-        return await asyncio.gather(
+        # Writing stdin concurrently with draining stdout/stderr (rather
+        # than write-then-read) avoids the classic pipe deadlock: a large
+        # stdin payload and a chatty child can each fill their own pipe
+        # buffer while waiting on the other side.
+        _, stdout_bytes, stderr_bytes = await asyncio.gather(
+            _write_stdin(),
             _read_capped(process.stdout, max_stdout_bytes),
             _read_capped(process.stderr, max_stderr_bytes),
         )
+        return stdout_bytes, stderr_bytes
 
     collect_task = asyncio.ensure_future(_collect())
     wait_tasks: list[asyncio.Future] = [collect_task]
@@ -222,6 +252,7 @@ class ShellRunner(ABC):
         cancel_event: asyncio.Event | None = None,
         max_stdout_bytes: int = _DEFAULT_MAX_OUTPUT_BYTES,
         max_stderr_bytes: int = _DEFAULT_MAX_OUTPUT_BYTES,
+        stdin_data: bytes | None = None,
     ) -> RunResult: ...
 
 
@@ -236,10 +267,12 @@ class PosixRunner(ShellRunner):
         cancel_event: asyncio.Event | None = None,
         max_stdout_bytes: int = _DEFAULT_MAX_OUTPUT_BYTES,
         max_stderr_bytes: int = _DEFAULT_MAX_OUTPUT_BYTES,
+        stdin_data: bytes | None = None,
     ) -> RunResult:
         return await _exec(
             argv, cwd=cwd, timeout=timeout, env=env, cancel_event=cancel_event,
             max_stdout_bytes=max_stdout_bytes, max_stderr_bytes=max_stderr_bytes,
+            stdin_data=stdin_data,
         )
 
 
@@ -254,10 +287,12 @@ class PowerShellRunner(ShellRunner):
         cancel_event: asyncio.Event | None = None,
         max_stdout_bytes: int = _DEFAULT_MAX_OUTPUT_BYTES,
         max_stderr_bytes: int = _DEFAULT_MAX_OUTPUT_BYTES,
+        stdin_data: bytes | None = None,
     ) -> RunResult:
         return await _exec(
             argv, cwd=cwd, timeout=timeout, env=env, cancel_event=cancel_event,
             max_stdout_bytes=max_stdout_bytes, max_stderr_bytes=max_stderr_bytes,
+            stdin_data=stdin_data,
         )
 
 

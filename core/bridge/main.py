@@ -12,6 +12,12 @@ variables (set by the Tauri Rust side when spawning the sidecar):
     are configured, so the end-to-end smoke test can exercise the full
     autonomous pipeline deterministically without real API keys. Never set
     by the desktop app itself.
+  * `ORCH_DETECT_CLI_PROVIDERS` -- defaults to enabled; set to "0"/"false"
+    to skip auto-detecting Codex CLI/Claude Code CLI at startup. Real
+    end-user runs always want detection on; tests that need a
+    deterministic "no provider available" scenario set this to "false" so
+    the result never depends on what happens to be installed and
+    authenticated on the machine running the suite.
 
 Every log line goes to stderr and/or the rotating log file under the
 platform log directory -- never stdout, which is reserved entirely for the
@@ -55,10 +61,11 @@ async def _async_main() -> int:
     provider_overrides: dict[str, ProviderAdapter] | None = None
     if os.environ.get("ORCH_ENABLE_MOCK_PROVIDER", "").lower() in ("1", "true"):
         provider_overrides = {"mock": MockProvider()}
+    detect_cli_providers = os.environ.get("ORCH_DETECT_CLI_PROVIDERS", "true").lower() not in ("0", "false")
 
     context = await build_context(
         paths.db_path, event_sink=sink, orchestration_event_sink=orchestration_sink,
-        provider_overrides=provider_overrides,
+        provider_overrides=provider_overrides, detect_cli_providers=detect_cli_providers,
     )
 
     report = await recover_interrupted_work(context.task_service, context.executions_repo)

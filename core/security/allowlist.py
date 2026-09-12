@@ -99,5 +99,7 @@ class BridgeCommand(str, Enum):
     DATABASE_BACKUP_RESTORE = "database.backup.restore"
     DATABASE_INTEGRITY_CHECK = "database.integrity_check"
 
+    PROVIDER_CLI_STATUS_LIST = "provider.cli.status.list"
+
 
 ALL_COMMANDS: frozenset[str] = frozenset(member.value for member in BridgeCommand)

@@ -10,11 +10,16 @@ Two groups of default agents:
     available for the same capability (they still exist so the app is
     usable -- projects, history, settings -- even with zero keys
     configured, and so tests never need real credentials).
-  * the six standard specialist agents (Claude Architect/Reviewer, Gemini
-    Researcher/Analyst, Codex Developer/Tester) -- real-provider agents,
-    each with the narrowest tool/permission set its role actually needs
+  * the eight standard specialist agents -- real-provider agents, each
+    with the narrowest tool/permission set its role actually needs
     (principle of least privilege): a researcher never gets `WriteFile`, a
     developer never gets `RunBuild` without also getting `RunTest`, etc.
+    Six are HTTP-API-based (Claude Architect/Reviewer via Anthropic, Gemini
+    Researcher/Analyst, OpenAI Developer/Tester via Chat Completions); two
+    are CLI-wrapped (Codex CLI Developer, Claude Code Architect), which run
+    the real, officially-authenticated Codex/Claude Code products with
+    their own built-in tool use rather than this app's `ToolExecutor` --
+    see `core.providers.cli_provider`'s trust-boundary docstring.
 
 `AgentRegistry` is deliberately narrow (list/get/find-by-capability) so a
 future stage backing it with the `agents` table instead of this fixed list
@@ -128,8 +133,13 @@ _STANDARD_AGENTS: list[Agent] = [
     ),
     Agent(
         id="agent_codex_developer",
-        name="Codex Developer",
-        description="Writing, refactoring, and debugging code.",
+        name="OpenAI Developer",
+        description=(
+            "Writing, refactoring, and debugging code via the OpenAI Chat Completions API. "
+            "Distinct from the real Codex product -- see `agent_codex_cli_developer` for that, "
+            "provider='codex_cli' (spec Stage 5: the two were previously conflated under this "
+            "agent's old 'Codex Developer' name)."
+        ),
         provider="openai",
         model="gpt-5.1-codex",
         system_prompt="",
@@ -145,8 +155,12 @@ _STANDARD_AGENTS: list[Agent] = [
     ),
     Agent(
         id="agent_codex_tester",
-        name="Codex Tester",
-        description="Test generation, bug analysis, implementation validation.",
+        name="OpenAI Tester",
+        description=(
+            "Test generation, bug analysis, implementation validation via the OpenAI Chat "
+            "Completions API. See `agent_codex_developer`'s description for why this is no "
+            "longer named 'Codex'."
+        ),
         provider="openai",
         model="gpt-5.1",
         system_prompt="",
@@ -157,6 +171,56 @@ _STANDARD_AGENTS: list[Agent] = [
         tools=["ReadFile", "ListFiles", "SearchFiles", "WriteFile", "RunTest"],
         permissions=AgentPermissions(
             can_read_files=True, can_write_files=True, can_run_git=False, can_run_terminal=True
+        ),
+    ),
+    # -- CLI-wrapped providers (Stage 5) -----------------------------------
+    # `tools=[]`: a CLI-routed step never goes through this app's
+    # `ToolExecutor`/tool-use loop -- the CLI has its own internal agentic
+    # tool loop (see `core.providers.cli_provider`'s trust-boundary
+    # docstring). `permissions` still documents real intent (what the CLI
+    # is meant to be allowed to do) even though today only `risk` -- not
+    # `agent.permissions` -- drives the CLI's own sandbox mode; wiring
+    # `agent.permissions` into that mapping is a noted follow-up.
+    Agent(
+        id="agent_codex_cli_developer",
+        name="Codex CLI Developer",
+        description=(
+            "Writing, refactoring, and debugging code via the real, official Codex CLI "
+            "(ChatGPT-account authenticated), with its own built-in file/shell tool use -- "
+            "not the OpenAI Chat Completions API (see `agent_codex_developer` for that)."
+        ),
+        provider="codex_cli",
+        model="default",
+        system_prompt="",
+        capabilities=[
+            AgentCapability(name="coding", description="Implements features."),
+            AgentCapability(name="debugging", description="Fixes bugs."),
+            AgentCapability(name="refactoring", description="Improves existing code."),
+        ],
+        tools=[],
+        permissions=AgentPermissions(
+            can_read_files=True, can_write_files=True, can_run_git=True, can_run_terminal=True
+        ),
+    ),
+    Agent(
+        id="agent_claude_code_architect",
+        name="Claude Code Architect",
+        description=(
+            "Architecture, technical planning, and hands-on implementation via the real, "
+            "official Claude Code CLI (with its own built-in file/shell tool use) -- not the "
+            "Anthropic Messages API (see `agent_claude_architect` for that)."
+        ),
+        provider="claude_code_cli",
+        model="default",
+        system_prompt="",
+        capabilities=[
+            AgentCapability(name="architecture", description="Designs and evaluates structure."),
+            AgentCapability(name="coding", description="Implements features."),
+            AgentCapability(name="planning", description="Breaks a goal into a technical plan."),
+        ],
+        tools=[],
+        permissions=AgentPermissions(
+            can_read_files=True, can_write_files=True, can_run_git=True, can_run_terminal=True
         ),
     ),
 ]

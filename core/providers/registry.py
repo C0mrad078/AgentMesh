@@ -149,6 +149,35 @@ DEFAULT_MODELS: tuple[ModelInfo, ...] = (
         priority=9,
     ),
     ModelInfo(
+        # CLI-wrapped providers (Stage 5): cost is 0 here not because
+        # execution is free, but because it is billed out-of-band through
+        # the CLI's own subscription/account, never per-token-tracked by
+        # this app -- the Router's cost-penalty term simply does not apply
+        # to these two. `context_window` is a conservative placeholder
+        # (never independently confirmed via a CLI diagnostic -- there
+        # isn't one) rather than a verified figure.
+        provider="codex_cli",
+        model_id="default",
+        display_name="Codex CLI (ChatGPT account)",
+        capabilities=("coding", "debugging", "refactoring"),
+        context_window=200_000,
+        supports_tools=False,
+        supports_files=False,
+        supports_structured_output=False,
+        priority=8,
+    ),
+    ModelInfo(
+        provider="claude_code_cli",
+        model_id="default",
+        display_name="Claude Code CLI",
+        capabilities=("architecture", "coding", "planning"),
+        context_window=200_000,
+        supports_tools=False,
+        supports_files=False,
+        supports_structured_output=False,
+        priority=8,
+    ),
+    ModelInfo(
         provider="mock",
         model_id="mock-general-1",
         display_name="Mock General",

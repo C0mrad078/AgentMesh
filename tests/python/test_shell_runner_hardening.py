@@ -113,3 +113,59 @@ async def test_missing_executable_raises_tool_denied() -> None:
     runner = PosixRunner()
     with pytest.raises(ToolDeniedError):
         await runner.run(["this-binary-does-not-exist-anywhere"], timeout=2.0)
+
+
+async def test_child_stdin_is_devnull_not_inherited_from_the_parent() -> None:
+    # `asyncio.create_subprocess_exec` inherits the parent's stdin unless
+    # told otherwise -- in production, the orchestrator's own stdin is the
+    # Rust<->Python JSON-lines bridge pipe. A spawned child (a CLI provider,
+    # git, a project command) reading from an inherited stdin could steal
+    # bytes meant for that protocol, or hang forever waiting for input that
+    # will never arrive. `sys.stdin.read()` must see immediate EOF (`''`),
+    # not block.
+    runner = PosixRunner()
+    result = await runner.run(
+        ["python3", "-c", "import sys; data = sys.stdin.read(); print(repr(data))"],
+        timeout=3.0,
+    )
+    assert result.success
+    assert "''" in result.stdout
+
+
+async def test_stdin_data_is_piped_without_deadlocking_on_large_output() -> None:
+    # A naive write-then-read implementation deadlocks here: a large stdin
+    # payload and a child that echoes a lot back on stdout can each fill
+    # their pipe's OS buffer while waiting on the other side.
+    runner = PosixRunner()
+    payload = b"x" * (256 * 1024)
+    result = await runner.run(
+        ["python3", "-c", "import sys; data = sys.stdin.buffer.read(); sys.stdout.buffer.write(data)"],
+        timeout=10.0,
+        stdin_data=payload,
+    )
+    assert result.success
+    assert len(result.stdout.encode()) == len(payload)
+
+
+async def test_no_stdin_data_still_closes_stdin_as_devnull() -> None:
+    runner = PosixRunner()
+    result = await runner.run(
+        ["python3", "-c", "import sys; print(repr(sys.stdin.read()))"],
+        timeout=3.0,
+    )
+    assert result.success
+    assert "''" in result.stdout
+
+
+async def test_user_env_var_is_inherited_for_keychain_based_cli_tools() -> None:
+    # Real, live-verified finding: `claude auth status` reports
+    # `loggedIn: false` for an already-authenticated account when `USER`
+    # is missing from the child's environment (its Keychain lookup depends
+    # on it). `USER` is exactly as benign as `HOME`, already inherited.
+    os.environ.setdefault("USER", "someone")
+    runner = PosixRunner()
+    result = await runner.run(
+        ["python3", "-c", "import os; print(os.environ.get('USER', 'ABSENT'))"],
+        timeout=5.0,
+    )
+    assert result.stdout.strip() == os.environ["USER"]

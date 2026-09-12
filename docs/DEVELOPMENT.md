@@ -73,8 +73,13 @@ CI; rode-o antes de abrir um PR.
 4. Teste com `respx` mockando a API HTTP (veja
    `tests/python/test_anthropic_provider.py` como referência) — sucesso,
    401, 429 com `Retry-After`, 500, timeout, resposta malformada.
-5. **Nunca** rode um teste contra a API real por padrão — testes "live"
-   ficam atrás de `RUN_LIVE_AI_TESTS=true`.
+5. **Nunca** rode um teste contra a API/CLI real por padrão. Providers HTTP
+   (Anthropic/Gemini/OpenAI) são 100% mockados via `respx`, então não há
+   "modo live" para eles. Providers CLI (Codex, Claude Code) não têm como
+   ser mockados no nível de subprocess da mesma forma — para esses,
+   `RUN_LIVE_AI_TESTS=true` (ver `tests/python/test_codex_cli_provider_live.py`)
+   habilita um teste que só roda de fato se o binário estiver instalado e
+   autenticado, pulando (nunca falhando) caso contrário.
 
 ### Adicionar uma nova regra de aprendizado ou playbook seed
 

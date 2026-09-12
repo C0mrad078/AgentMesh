@@ -94,6 +94,13 @@ class AIRequest:
     attachments: tuple[Attachment, ...] = ()
     metadata: dict[str, Any] = field(default_factory=dict)
     timeout_seconds: float = 60.0
+    # Only meaningful to a CLI-wrapped adapter (Codex CLI, Claude Code CLI,
+    # Gemini CLI): those tools run their own agentic tool-use loop directly
+    # against the filesystem, bypassing this app's `ToolExecutor`/Permission
+    # Engine entirely for that step -- see `core/providers/cli_provider.py`
+    # for how the risk tier still constrains what they're allowed to touch.
+    # HTTP-API adapters ignore this field.
+    workspace_path: str | None = None
     max_tokens: int | None = None
     temperature: float | None = None
 
@@ -179,10 +186,61 @@ class ConnectionTestResult(str, Enum):
     UNKNOWN_ERROR = "unknown_error"
 
 
+class ProviderAccessMethod(str, Enum):
+    """How this adapter actually reaches the model -- distinct identities
+    the UI and router both need (e.g. `codex_cli` is not "OpenAI API" with
+    a different transport; it is a different tool with its own auth, its
+    own sandbox, and its own agentic tool-use loop)."""
+
+    HTTP_API = "http_api"
+    CLI = "cli"
+    MOCK = "mock"
+
+
+class ProviderConnectionState(str, Enum):
+    """Coarse state a "Providers" settings card renders directly."""
+
+    CONNECTED = "connected"
+    DISCONNECTED = "disconnected"
+    NOT_INSTALLED = "not_installed"
+    ERROR = "error"
+
+
+@dataclass(frozen=True)
+class ProviderStatus:
+    """Rich status for the Providers UI -- a superset of `health_check()`,
+    which only answers "can the Router use this right now". CLI adapters
+    populate every field from real, freshly-run diagnostics (never cached
+    assumptions); HTTP adapters report what little of this concept applies
+    to them (installed is meaningless, auth_method is "api_key", etc.)."""
+
+    access_method: ProviderAccessMethod
+    state: ProviderConnectionState
+    version: str | None = None
+    auth_method: str | None = None
+    model: str | None = None
+    detail: str | None = None
+
+
 class ProviderAdapter(ABC):
     """Common interface every AI provider adapter must implement."""
 
     name: str
+    access_method: ProviderAccessMethod = ProviderAccessMethod.HTTP_API
+
+    async def get_status(self) -> ProviderStatus:
+        """Rich, UI-facing status. Default implementation for HTTP-API
+        adapters (and the mock provider): derives a coarse state from
+        `health_check()` since there is no separate "installed"/"CLI
+        version" concept for them. CLI adapters override this with real
+        `--version`/login-status diagnostics."""
+        health = await self.health_check()
+        state = (
+            ProviderConnectionState.CONNECTED
+            if health == ProviderHealthStatus.ONLINE
+            else ProviderConnectionState.DISCONNECTED
+        )
+        return ProviderStatus(access_method=self.access_method, state=state, auth_method="api_key")
 
     @abstractmethod
     async def execute(self, request: AIRequest) -> AIResponse:

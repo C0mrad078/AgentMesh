@@ -1,6 +1,7 @@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { ProvidersSettings } from "@/components/ProvidersSettings";
+import { CliProvidersSettings } from "@/components/CliProvidersSettings";
 import { BudgetSettings } from "@/components/BudgetSettings";
 import { DataManagementSettings } from "@/components/DataManagementSettings";
 import packageJson from "../../package.json";
@@ -40,17 +41,31 @@ export function SettingsPage() {
           <TabsTrigger value="about">Sobre</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="providers">
+        <TabsContent value="providers" className="flex flex-col gap-4">
           <Card>
             <CardHeader>
-              <CardTitle>Providers</CardTitle>
+              <CardTitle>Providers (API)</CardTitle>
               <CardDescription>
-                Configure as chaves de API do Claude, Gemini e OpenAI/Codex. O Orquestrador só
-                usa um provider automaticamente depois que ele está conectado aqui.
+                Configure as chaves de API do Claude, Gemini e OpenAI. O Orquestrador só usa um
+                provider automaticamente depois que ele está conectado aqui.
               </CardDescription>
             </CardHeader>
             <CardContent>
               <ProvidersSettings />
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Providers (CLI)</CardTitle>
+              <CardDescription>
+                Codex CLI e Claude Code CLI usam a autenticação oficial de cada ferramenta (conta
+                ChatGPT/Claude via navegador), não uma API key -- e têm acesso próprio a
+                arquivos/terminal, fora do sandbox padrão do Orquestrador.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <CliProvidersSettings />
             </CardContent>
           </Card>
         </TabsContent>

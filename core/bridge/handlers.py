@@ -793,6 +793,15 @@ async def _database_integrity_check(params: dict[str, Any], ctx: BridgeContext) 
     return {"ok": ok, "issues": [] if ok else ["quick_check failed"]}
 
 
+# --- provider CLI discovery ---------------------------------------------------
+
+
+@handler(BridgeCommand.PROVIDER_CLI_STATUS_LIST)
+async def _provider_cli_status_list(_params: dict[str, Any], ctx: BridgeContext) -> dict[str, Any]:
+    statuses = await ctx.provider_manager.list_cli_statuses()
+    return {name: asdict(status) for name, status in statuses.items()}
+
+
 # --- helpers -----------------------------------------------------------------
 
 

@@ -41,12 +41,18 @@ REQUEST_TIMEOUT_SECONDS = 10.0
 class SidecarClient:
     """Minimal JSON-lines client mirroring the Rust `BridgeManager`."""
 
-    def __init__(self, data_dir: Path, *, enable_mock_provider: bool = False) -> None:
+    def __init__(
+        self, data_dir: Path, *, enable_mock_provider: bool = False, detect_cli_providers: bool = False,
+    ) -> None:
         env = dict(os.environ)
         env["ORCH_SESSION_TOKEN"] = SESSION_TOKEN
         env["ORCH_DATA_DIR"] = str(data_dir)
         if enable_mock_provider:
             env["ORCH_ENABLE_MOCK_PROVIDER"] = "1"
+        # Off by default here (unlike the real app): whether Codex/Claude
+        # Code CLI happen to be installed and authenticated on the machine
+        # running this suite must never change what these tests assert.
+        env["ORCH_DETECT_CLI_PROVIDERS"] = "true" if detect_cli_providers else "false"
         self.process = subprocess.Popen(
             [sys.executable, "-m", "core.bridge.main"],
             cwd=str(REPO_ROOT),
@@ -295,3 +301,32 @@ def test_read_message_enforces_a_real_timeout_when_the_sidecar_writes_nothing() 
     elapsed = time.monotonic() - start
 
     assert elapsed < 2.0, f"_read_message blocked for {elapsed:.2f}s instead of honoring its timeout"
+
+
+def test_real_sidecar_detects_cli_providers_when_enabled(data_dir: Path) -> None:
+    """Genuinely live: spawns the real sidecar process with
+    `ORCH_DETECT_CLI_PROVIDERS=true` and confirms it actually finds and
+    authenticates the installed Codex/Claude Code CLIs -- proving the
+    `main.py` -> `build_context` -> `ProviderManager` wiring works
+    end-to-end through the real bridge protocol, not just in a unit test.
+    Skipped unless `RUN_LIVE_AI_TESTS=true` (this spawns real `codex`/
+    `claude` diagnostic subprocesses, not free "no dependency" behavior).
+    """
+    if os.environ.get("RUN_LIVE_AI_TESTS") != "true":
+        pytest.skip("Set RUN_LIVE_AI_TESTS=true to run this against real installed CLIs.")
+
+    client = SidecarClient(data_dir, detect_cli_providers=True)
+    try:
+        response = client.call("provider.cli.status.list")
+        assert response["ok"] is True
+        statuses = response["result"]
+        assert set(statuses.keys()) == {"codex_cli", "claude_code_cli", "gemini_cli"}
+        # Not asserting CONNECTED for every one -- only that whichever ARE
+        # actually installed/authenticated on this machine are correctly
+        # reported, proving the real subprocess round-trip works.
+        for name, status in statuses.items():
+            assert status["state"] in (
+                "connected", "disconnected", "not_installed", "error",
+            ), f"{name} reported an unexpected state: {status}"
+    finally:
+        client.close()

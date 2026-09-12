@@ -9,6 +9,8 @@ import { invokeBridge } from "@/services/bridge";
 import type {
   Agent,
   BudgetLimits,
+  CliProviderName,
+  CliProviderStatus,
   ConnectionTestResult,
   ContextSuggestion,
   Execution,
@@ -103,6 +105,11 @@ export const providersApi = {
       provider,
       ...(api_key ? { api_key } : {}),
     }),
+};
+
+export const providerCliApi = {
+  listStatuses: () =>
+    invokeBridge<Record<CliProviderName, CliProviderStatus>>("provider.cli.status.list"),
 };
 
 export const modelsApi = {

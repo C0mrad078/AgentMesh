@@ -36,20 +36,45 @@ from core.database.connection import Database
 from core.database.repositories.agents_repo import AgentsRepository
 from core.database.repositories.audit_logs_repo import AuditLogsRepository
 from core.database.repositories.budgets_repo import BudgetsRepository
+from core.database.repositories.context_metrics_repo import ContextMetricsRepository
 from core.database.repositories.execution_events_repo import ExecutionEventsRepository
 from core.database.repositories.execution_steps_repo import ExecutionStepsRepository
 from core.database.repositories.executions_repo import ExecutionsRepository
+from core.database.repositories.learned_rules_repo import LearnedRulesRepository
+from core.database.repositories.learning_candidates_repo import LearningCandidatesRepository
+from core.database.repositories.learning_events_repo import LearningEventsRepository
+from core.database.repositories.learning_policy_repo import LearningPolicyRepository
+from core.database.repositories.memory_conflicts_repo import MemoryConflictsRepository
+from core.database.repositories.model_performance_repo import ModelPerformanceRepository
 from core.database.repositories.model_registry_repo import ModelRegistryRepository
+from core.database.repositories.playbooks_repo import (
+    PlaybooksRepository,
+    PlaybookVersionsRepository,
+)
 from core.database.repositories.project_memories_repo import ProjectMemoriesRepository
 from core.database.repositories.projects_repo import ProjectsRepository
+from core.database.repositories.prompt_evaluations_repo import PromptEvaluationsRepository
+from core.database.repositories.prompt_regression_cases_repo import PromptRegressionCasesRepository
 from core.database.repositories.prompt_versions_repo import PromptVersionsRepository
 from core.database.repositories.provider_configs_repo import ProviderConfigsRepository
 from core.database.repositories.provider_health_repo import ProviderHealthRepository
+from core.database.repositories.reflections_repo import ReflectionsRepository
 from core.database.repositories.routing_decisions_repo import RoutingDecisionsRepository
+from core.database.repositories.rule_evidence_repo import RuleEvidenceRepository
 from core.database.repositories.settings_repo import SettingsRepository
 from core.database.repositories.tasks_repo import TasksRepository
 from core.database.repositories.tool_calls_repo import ToolCallsRepository
 from core.database.repositories.usage_metrics_repo import UsageMetricsRepository
+from core.database.repositories.user_feedback_repo import UserFeedbackRepository
+from core.learning.context_optimizer import ContextOptimizer
+from core.learning.learning_engine import LearningEngine
+from core.learning.model_performance import ModelPerformanceTracker
+from core.learning.playbooks import PlaybookMatcher
+from core.learning.policy import LearningPolicyManager
+from core.learning.post_execution import PostExecutionPipeline
+from core.learning.prompt_optimizer import PromptOptimizer
+from core.learning.reflection_engine import ReflectionEngine
+from core.learning.rule_resolver import RuleResolver
 from core.memory.store import SqliteMemoryStore
 from core.orchestrator.aggregator import ResultAggregator
 from core.orchestrator.budget import BudgetManager
@@ -115,8 +140,36 @@ class BridgeContext:
     budgets_repo: BudgetsRepository
     budget: BudgetManager
     event_bus: EventBus
+    # -- Stage 3: reflection / learning ----------------------------------
+    reflections_repo: ReflectionsRepository
+    learning_candidates_repo: LearningCandidatesRepository
+    learned_rules_repo: LearnedRulesRepository
+    rule_evidence_repo: RuleEvidenceRepository
+    playbooks_repo: PlaybooksRepository
+    playbook_versions_repo: PlaybookVersionsRepository
+    model_performance_repo: ModelPerformanceRepository
+    prompt_evaluations_repo: PromptEvaluationsRepository
+    prompt_regression_cases_repo: PromptRegressionCasesRepository
+    user_feedback_repo: UserFeedbackRepository
+    memory_conflicts_repo: MemoryConflictsRepository
+    learning_events_repo: LearningEventsRepository
+    learning_policy_repo: LearningPolicyRepository
+    context_metrics_repo: ContextMetricsRepository
+    rule_resolver: RuleResolver
+    performance_tracker: ModelPerformanceTracker
+    playbook_matcher: PlaybookMatcher
+    reflection_engine: ReflectionEngine
+    learning_engine: LearningEngine
+    learning_policy_manager: LearningPolicyManager
+    prompt_optimizer: PromptOptimizer
+    context_optimizer: ContextOptimizer
 
     async def close(self) -> None:
+        # Let any in-flight background reflection/learning work finish
+        # before the DB and provider adapters it depends on go away --
+        # otherwise a reflection racing shutdown would fail loudly (or
+        # silently lose work) against an already-closed connection.
+        await self.engine.wait_for_pending_reflections()
         for provider_name in self.provider_pool.names():
             adapter = self.provider_pool.get(provider_name)
             aclose = getattr(adapter, "aclose", None)
@@ -138,7 +191,8 @@ async def build_context(
 
     audit_logger = AuditLogger(AuditLogsRepository(db))
     project_service = ProjectService(ProjectsRepository(db), audit_logger)
-    task_service = TaskService(TasksRepository(db))
+    tasks_repo = TasksRepository(db)
+    task_service = TaskService(tasks_repo)
 
     agent_registry = AgentRegistry()
     agents_repo = AgentsRepository(db)
@@ -146,6 +200,7 @@ async def build_context(
 
     prompt_registry = PromptRegistry(PromptVersionsRepository(db))
     await prompt_registry.seed_defaults(list(DEFAULT_PROMPTS.keys()))
+    await prompt_registry.seed_core_and_orchestrator_prompts()
 
     model_registry_repo = ModelRegistryRepository(db)
     await model_registry_repo.seed_defaults(list(DEFAULT_MODELS))
@@ -154,7 +209,8 @@ async def build_context(
     executions_repo = ExecutionsRepository(db)
     steps_repo = ExecutionStepsRepository(db)
     settings_repo = SettingsRepository(db)
-    memory_store = SqliteMemoryStore(ProjectMemoriesRepository(db))
+    memory_conflicts_repo = MemoryConflictsRepository(db)
+    memory_store = SqliteMemoryStore(ProjectMemoriesRepository(db), memory_conflicts_repo)
 
     provider_configs_repo = ProviderConfigsRepository(db)
     provider_health_repo = ProviderHealthRepository(db)
@@ -163,6 +219,27 @@ async def build_context(
     usage_metrics_repo = UsageMetricsRepository(db)
     execution_events_repo = ExecutionEventsRepository(db)
     budgets_repo = BudgetsRepository(db)
+
+    reflections_repo = ReflectionsRepository(db)
+    learning_candidates_repo = LearningCandidatesRepository(db)
+    learned_rules_repo = LearnedRulesRepository(db)
+    rule_evidence_repo = RuleEvidenceRepository(db)
+    playbooks_repo = PlaybooksRepository(db)
+    playbook_versions_repo = PlaybookVersionsRepository(db)
+    model_performance_repo = ModelPerformanceRepository(db)
+    prompt_evaluations_repo = PromptEvaluationsRepository(db)
+    prompt_regression_cases_repo = PromptRegressionCasesRepository(db)
+    user_feedback_repo = UserFeedbackRepository(db)
+    learning_events_repo = LearningEventsRepository(db)
+    learning_policy_repo = LearningPolicyRepository(db)
+    context_metrics_repo = ContextMetricsRepository(db)
+
+    for target, name, description in (
+        ("planner", "planner_produces_valid_dependencies", "O Planner deve gerar dependências válidas entre steps."),
+        ("router", "router_never_selects_offline_provider", "O Router nunca deve selecionar um provider não registrado."),
+        ("verifier", "verifier_rejects_empty_output", "O Verifier deve rejeitar um step completo com saída vazia."),
+    ):
+        await prompt_regression_cases_repo.seed(target, name, description)
 
     secret_store = secret_store or create_secret_store()
     provider_pool = ProviderPool()
@@ -192,19 +269,45 @@ async def build_context(
     if orchestration_event_sink is not None:
         event_bus.subscribe(orchestration_event_sink)
 
+    rule_resolver = RuleResolver(learned_rules_repo)
+    performance_tracker = ModelPerformanceTracker(model_performance_repo)
+    playbook_matcher = PlaybookMatcher(playbooks_repo, playbook_versions_repo)
+    await playbook_matcher.seed_defaults()
+    learning_policy_manager = LearningPolicyManager(learning_policy_repo)
+
+    reflection_engine = ReflectionEngine(
+        executions_repo, tasks_repo, routing_decisions_repo, tool_calls_repo, usage_metrics_repo,
+        context_metrics_repo, model_registry, provider_pool, health_monitor,
+    )
+    learning_engine = LearningEngine(
+        learning_candidates_repo, learned_rules_repo, rule_evidence_repo, learning_events_repo,
+        learning_policy_manager,
+    )
+    prompt_optimizer = PromptOptimizer(prompt_registry, prompt_evaluations_repo)
+    context_optimizer = ContextOptimizer()
+
     step_executor = StepExecutor(provider_pool, health_monitor, concurrency, budget, event_bus, model_registry)
-    router = Router(agent_registry, model_registry, provider_pool, health_monitor)
+    router = Router(
+        agent_registry, model_registry, provider_pool, health_monitor,
+        performance_tracker=performance_tracker, rule_resolver=rule_resolver,
+    )
     ai_planner = AIPlanner(model_registry, provider_pool, health_monitor) if provider_pool.names() else None
-    planner = Planner(ai_planner)
+    planner = Planner(ai_planner, playbook_matcher)
     judge = Judge(router, provider_pool, agent_registry)
     verifier = Verifier()
     aggregator = ResultAggregator()
     context_builder = ContextBuilder()
 
+    post_execution_pipeline = PostExecutionPipeline(
+        reflection_engine, reflections_repo, learning_engine, performance_tracker, playbook_matcher,
+        rule_resolver, event_bus, prompt_optimizer,
+    )
+
     engine = ExecutionEngine(
         executions_repo, steps_repo, task_service, project_service, agent_registry, prompt_registry,
         provider_pool, planner, router, step_executor, judge, verifier, aggregator, context_builder,
         budget, event_bus, phase_event_sink=event_sink or noop_sink,
+        context_metrics_repo=context_metrics_repo, post_execution_pipeline=post_execution_pipeline,
     )
 
     return BridgeContext(
@@ -233,4 +336,26 @@ async def build_context(
         budgets_repo=budgets_repo,
         budget=budget,
         event_bus=event_bus,
+        reflections_repo=reflections_repo,
+        learning_candidates_repo=learning_candidates_repo,
+        learned_rules_repo=learned_rules_repo,
+        rule_evidence_repo=rule_evidence_repo,
+        playbooks_repo=playbooks_repo,
+        playbook_versions_repo=playbook_versions_repo,
+        model_performance_repo=model_performance_repo,
+        prompt_evaluations_repo=prompt_evaluations_repo,
+        prompt_regression_cases_repo=prompt_regression_cases_repo,
+        user_feedback_repo=user_feedback_repo,
+        memory_conflicts_repo=memory_conflicts_repo,
+        learning_events_repo=learning_events_repo,
+        learning_policy_repo=learning_policy_repo,
+        context_metrics_repo=context_metrics_repo,
+        rule_resolver=rule_resolver,
+        performance_tracker=performance_tracker,
+        playbook_matcher=playbook_matcher,
+        reflection_engine=reflection_engine,
+        learning_engine=learning_engine,
+        learning_policy_manager=learning_policy_manager,
+        prompt_optimizer=prompt_optimizer,
+        context_optimizer=context_optimizer,
     )

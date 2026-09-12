@@ -10,14 +10,26 @@ import type {
   Agent,
   BudgetLimits,
   ConnectionTestResult,
+  ContextSuggestion,
   Execution,
   ExecutionEventRecord,
   ExecutionStep,
   ExecutionUsageSummary,
+  LearnedRule,
+  LearningCandidate,
+  LearningEvent,
+  LearningPolicy,
+  MemoryRecordItem,
   ModelInfo,
+  ModelPerformanceSummary,
+  Playbook,
+  PlaybookVersion,
   Project,
+  PromptProposalEvent,
+  PromptVersion,
   ProviderInfo,
   ProviderName,
+  ReflectionRecord,
   RoutingDecisionRecord,
   Task,
   TaskMode,
@@ -112,4 +124,67 @@ export const settingsApi = {
 
 export const healthApi = {
   check: () => invokeBridge<{ status: string }>("health.check"),
+};
+
+export const learningApi = {
+  rules: (status?: string) => invokeBridge<LearnedRule[]>("learning.rules.list", status ? { status } : {}),
+  pinRule: (rule_id: string) => invokeBridge<LearnedRule>("learning.rules.pin", { rule_id }),
+  unpinRule: (rule_id: string) => invokeBridge<LearnedRule>("learning.rules.unpin", { rule_id }),
+  rollbackRule: (rule_id: string, reason?: string) =>
+    invokeBridge<LearnedRule>("learning.rules.rollback", { rule_id, reason }),
+  createRule: (input: {
+    title: string; category: string; rule_text: string; scope_type?: string;
+    scope_value?: string | null; priority?: string;
+  }) => invokeBridge<LearnedRule>("learning.rules.create", input),
+  candidates: () => invokeBridge<LearningCandidate[]>("learning.candidates.list"),
+  approveCandidate: (candidate_id: string) =>
+    invokeBridge<LearnedRule>("learning.candidates.approve", { candidate_id }),
+  rejectCandidate: (candidate_id: string, reason?: string) =>
+    invokeBridge<LearningCandidate>("learning.candidates.reject", { candidate_id, reason }),
+  policy: () => invokeBridge<LearningPolicy>("learning.policy.get"),
+  setPolicy: (input: Partial<Omit<LearningPolicy, "id" | "updated_at">>) =>
+    invokeBridge<LearningPolicy>("learning.policy.set", input),
+  events: (limit = 50) => invokeBridge<LearningEvent[]>("learning.events.list", { limit }),
+  export: () => invokeBridge<Record<string, unknown>>("learning.export"),
+  reset: (scope: "learned_rules" | "metrics" | "playbooks" | "full") =>
+    invokeBridge<{ reset: string[] }>("learning.reset", { scope, confirm: true }),
+};
+
+export const playbooksApi = {
+  list: () => invokeBridge<Playbook[]>("playbook.list"),
+  versions: (playbook_id: string) =>
+    invokeBridge<PlaybookVersion[]>("playbook.versions.list", { playbook_id }),
+};
+
+export const modelPerformanceApi = {
+  list: () => invokeBridge<ModelPerformanceSummary[]>("model_performance.list"),
+};
+
+export const contextOptimizerApi = {
+  suggestions: () => invokeBridge<ContextSuggestion[]>("context_optimizer.suggestions"),
+};
+
+export const reflectionsApi = {
+  forExecution: (execution_id: string) =>
+    invokeBridge<ReflectionRecord[]>("reflection.list", { execution_id }),
+  recent: (limit = 20) => invokeBridge<ReflectionRecord[]>("reflection.recent", { limit }),
+};
+
+export const promptsApi = {
+  versions: (owner_key: string) => invokeBridge<PromptVersion[]>("prompt.versions.list", { owner_key }),
+  rollback: (owner_key: string, target_version_id: string, reason?: string) =>
+    invokeBridge<PromptVersion>("prompt.rollback", { owner_key, target_version_id, reason }),
+  proposals: () => invokeBridge<PromptProposalEvent[]>("prompt.proposals.list"),
+  applyProposal: (event_id: string) => invokeBridge<PromptVersion>("prompt.proposals.apply", { event_id }),
+};
+
+export const feedbackApi = {
+  submit: (execution_id: string, rating: "up" | "down", feedback_type?: string, comment?: string) =>
+    invokeBridge<{ id: string }>("execution.feedback.submit", { execution_id, rating, feedback_type, comment }),
+};
+
+export const memoryApi = {
+  list: (project_id: string) => invokeBridge<MemoryRecordItem[]>("memory.list", { project_id }),
+  history: (project_id: string, key: string) =>
+    invokeBridge<MemoryRecordItem[]>("memory.history", { project_id, key }),
 };

@@ -32,11 +32,13 @@ from typing import Any
 from core.agents.models import Agent
 from core.agents.prompt_registry import PromptRegistry
 from core.agents.registry import AgentRegistry
+from core.database.repositories.context_metrics_repo import ContextMetricsRepository
 from core.database.repositories.execution_steps_repo import ExecutionStepsRepository
 from core.database.repositories.executions_repo import ExecutionRecord, ExecutionsRepository
+from core.learning.post_execution import PostExecutionPipeline
 from core.orchestrator.aggregator import ResultAggregator
 from core.orchestrator.budget import BudgetManager
-from core.orchestrator.context_builder import ContextBuilder
+from core.orchestrator.context_builder import ContextBuilder, ExecutionContext
 from core.orchestrator.dag import build_execution_layers
 from core.orchestrator.event_bus import EventBus, EventType, OrchestrationEvent
 from core.orchestrator.events import EventSink, ExecutionEvent, noop_sink
@@ -97,6 +99,8 @@ class ExecutionEngine:
         *,
         phase_event_sink: EventSink = noop_sink,
         max_review_iterations: int = 3,
+        context_metrics_repo: ContextMetricsRepository | None = None,
+        post_execution_pipeline: PostExecutionPipeline | None = None,
     ) -> None:
         self._executions_repo = executions_repo
         self._steps_repo = steps_repo
@@ -117,7 +121,10 @@ class ExecutionEngine:
         self._events = event_bus
         self._phase_sink = phase_event_sink
         self.max_review_iterations = max_review_iterations
+        self._context_metrics_repo = context_metrics_repo
+        self._post_execution = post_execution_pipeline
         self._cancel_events: dict[str, asyncio.Event] = {}
+        self._pending_reflections: set[asyncio.Task] = set()
 
     def request_cancel(self, execution_id: str) -> bool:
         event = self._cancel_events.get(execution_id)
@@ -128,6 +135,35 @@ class ExecutionEngine:
 
     def is_tracked(self, execution_id: str) -> bool:
         return execution_id in self._cancel_events
+
+    def _schedule_post_execution(self, execution_id: str) -> None:
+        """Fire-and-forget: the user already has their result by the time
+        this runs (see `run()`'s final steps). Reflection/learning failures
+        are logged, never surfaced -- this must never affect execution
+        state or crash the app. `wait_for_pending_reflections()` lets tests
+        (and, if ever needed, a graceful-shutdown path) synchronize on it.
+        """
+        if self._post_execution is None:
+            return
+        task = asyncio.ensure_future(self._run_post_execution_safely(execution_id))
+        self._pending_reflections.add(task)
+        task.add_done_callback(self._pending_reflections.discard)
+
+    async def _run_post_execution_safely(self, execution_id: str) -> None:
+        assert self._post_execution is not None
+        try:
+            await self._post_execution.process(execution_id)
+        except Exception:  # noqa: BLE001 - reflection/learning must never propagate
+            logger.exception(
+                "post_execution_pipeline_failed", extra={"context": {"execution_id": execution_id}}
+            )
+
+    async def wait_for_pending_reflections(self) -> None:
+        """Test/shutdown synchronization point -- awaits every reflection
+        currently in flight without raising (failures are already logged)."""
+        pending = list(self._pending_reflections)
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
 
     async def run(self, task: Task) -> ExecutionRecord:
         execution = await self._executions_repo.create(task_id=task.id, project_id=task.project_id)
@@ -156,7 +192,7 @@ class ExecutionEngine:
 
             step_index, plan = await self._run_phase(
                 execution.id, task.id, step_index, ExecutionPhase.PLANNING, cancel_event,
-                lambda: self._planner.create_plan(task, intent),
+                lambda: self._planner.create_plan(task, intent, workspace_path=workspace_path),
             )
             await self._executions_repo.update_plan(execution.id, _plan_to_dict(plan))
             await self._events.publish(OrchestrationEvent(
@@ -168,7 +204,7 @@ class ExecutionEngine:
 
             step_index, routes = await self._run_phase(
                 execution.id, task.id, step_index, ExecutionPhase.ROUTING, cancel_event,
-                lambda: self._route_all(plan, intent.risk, execution.id),
+                lambda: self._route_all(plan, intent.risk, execution.id, task.project_id),
             )
             if cancel_event.is_set():
                 return await self._finish_cancelled(execution.id, task.id)
@@ -218,6 +254,7 @@ class ExecutionEngine:
                     "tokens": aggregated.total_tokens,
                 },
             ))
+            self._schedule_post_execution(execution.id)
             return await self._executions_repo.get_or_raise(execution.id)
 
         except Exception as exc:  # noqa: BLE001 - deliberate top-level containment boundary
@@ -276,15 +313,15 @@ class ExecutionEngine:
 
     # -- routing -----------------------------------------------------------
 
-    def _route_all(
-        self, plan: ExecutionPlan, risk: RiskLevel, execution_id: str
+    async def _route_all(
+        self, plan: ExecutionPlan, risk: RiskLevel, execution_id: str, project_id: str,
     ) -> dict[str, RoutingDecision]:
         routes: dict[str, RoutingDecision] = {}
         for step in plan.steps:
             if step.step_type == "synthesis":
                 continue
             try:
-                decision = self._router.route(step, risk=risk)
+                decision = await self._router.route(step, risk=risk, project_id=project_id)
             except NotFoundError:
                 continue
             routes[step.id] = decision
@@ -428,6 +465,7 @@ class ExecutionEngine:
             step, routing, agent, system_prompt=system_prompt, context=context,
             tool_executor=tool_executor, cancel_event=cancel_event, execution_id=execution_id,
         )
+        await self._record_context_metrics(execution_id, step.id, agent.id, context, result.output)
 
         await self._steps_repo.complete(
             row.id, result.status,
@@ -446,6 +484,21 @@ class ExecutionEngine:
             },
         ))
         return result
+
+    async def _record_context_metrics(
+        self, execution_id: str, step_id: str, agent_id: str | None,
+        context: ExecutionContext, output: str | None,
+    ) -> None:
+        if self._context_metrics_repo is None or not context.relevant_files:
+            return
+        output_text = output or ""
+        files_used = [f.path for f in context.relevant_files if f.path in output_text]
+        await self._context_metrics_repo.record(
+            execution_id=execution_id, step_id=step_id, agent_id=agent_id,
+            file_paths=[f.path for f in context.relevant_files],
+            bytes_total=sum(len(f.content) for f in context.relevant_files),
+            files_used=files_used,
+        )
 
     async def _run_synthesis_step(
         self,
@@ -544,7 +597,9 @@ class ExecutionEngine:
         routing = routes.get(base_step.id)
         if routing is None:
             try:
-                routing = self._router.route(base_step, risk=plan.intent.risk)
+                routing = await self._router.route(
+                    base_step, risk=plan.intent.risk, project_id=task.project_id
+                )
             except NotFoundError:
                 return results, step_index
 
@@ -587,6 +642,9 @@ class ExecutionEngine:
         correction_result = await self._step_executor.run(
             correction_step, routing, agent, system_prompt=system_prompt, context=context,
             tool_executor=tool_executor, cancel_event=cancel_event, execution_id=execution_id,
+        )
+        await self._record_context_metrics(
+            execution_id, correction_step.id, agent.id, context, correction_result.output
         )
         await self._steps_repo.complete(
             row.id, correction_result.status,
@@ -634,6 +692,7 @@ def _plan_to_dict(plan: ExecutionPlan) -> dict:
         "task_id": plan.task_id,
         "strategy": plan.strategy,
         "source": plan.source,
+        "playbook_version_id": plan.playbook_version_id,
         "intent": asdict(plan.intent) if isinstance(plan.intent, Intent) else plan.intent,
         "steps": [asdict(step) for step in plan.steps],
     }

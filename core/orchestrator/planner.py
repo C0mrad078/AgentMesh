@@ -18,6 +18,7 @@ strategy to use for a given task (see `Planner.create_plan`).
 
 from __future__ import annotations
 
+from core.learning.playbooks import PlaybookMatch, PlaybookMatcher
 from core.orchestrator.dag import build_execution_layers
 from core.orchestrator.models import ComplexityLevel, ExecutionPlan, Intent, PlanStep, RiskLevel
 from core.orchestrator.validation import validate_against_schema
@@ -347,13 +348,27 @@ class Planner:
     available (a provider is configured and healthy) and warranted (the
     task is not trivial), and rule-based planning otherwise -- see the
     project's Offline Mode and "regra de economia" requirements.
+
+    Stage 3 adds one more source, tried first for Automatic tasks: a
+    matching `Orchestration Playbook` (see `core.learning.playbooks`). A
+    playbook is only adopted when its conditions are fully satisfied and
+    its confidence clears the matcher's threshold -- "não seguir playbook
+    cegamente" -- and the plan it produces still gets the same
+    high/critical-risk review-step safety net `RuleBasedPlanner` applies,
+    so adopting a playbook never skips that guarantee.
     """
 
-    def __init__(self, ai_planner: AIPlanner | None = None) -> None:
+    def __init__(self, ai_planner: AIPlanner | None = None, playbook_matcher: PlaybookMatcher | None = None) -> None:
         self._rule_based = RuleBasedPlanner()
         self._ai_planner = ai_planner
+        self._playbook_matcher = playbook_matcher
 
-    async def create_plan(self, task: Task, intent: Intent) -> ExecutionPlan:
+    async def create_plan(self, task: Task, intent: Intent, *, workspace_path: str | None = None) -> ExecutionPlan:
+        if task.mode == TaskMode.AUTOMATIC and self._playbook_matcher is not None:
+            playbook_plan = await self._try_playbook_plan(task, intent, workspace_path)
+            if playbook_plan is not None:
+                return playbook_plan
+
         # Only Automatic mode ever delegates to the AI planner -- Manual,
         # Pipeline, Debate, and Consensus all have an explicit structural
         # contract (which agent(s), in what shape) that only
@@ -366,6 +381,68 @@ class Planner:
         ):
             return await self._ai_planner.create_plan(task, intent)
         return self._rule_based.create_plan(task, intent)
+
+    async def _try_playbook_plan(
+        self, task: Task, intent: Intent, workspace_path: str | None,
+    ) -> ExecutionPlan | None:
+        assert self._playbook_matcher is not None
+        context_tags = _playbook_context_tags(intent, workspace_path)
+        match = await self._playbook_matcher.find_matching(
+            task_type=intent.primary_category, context_tags=context_tags
+        )
+        if match is None:
+            return None
+        return _plan_from_playbook(task, intent, match)
+
+
+def _playbook_context_tags(intent: Intent, workspace_path: str | None) -> frozenset[str]:
+    tags = {f"risk:{intent.risk.value}", f"complexity:{intent.complexity.value}", *intent.categories}
+    if workspace_path:
+        from core.tools.project_stack import detect_stacks
+
+        tags.update(f"stack:{stack.value}" for stack in detect_stacks(workspace_path))
+    return frozenset(tags)
+
+
+def _plan_from_playbook(task: Task, intent: Intent, match: PlaybookMatch) -> ExecutionPlan:
+    steps: list[PlanStep] = []
+    previous_id: str | None = None
+    has_review_step = False
+    for entry in match.strategy:
+        step_id = new_id("step")
+        step_type = entry.get("step_type", "implementation")
+        has_review_step = has_review_step or step_type == "review"
+        steps.append(
+            PlanStep(
+                id=step_id, name=f"{entry.get('description', match.name)}"[:200],
+                description=entry.get("description", ""),
+                required_capability=entry.get("capability", "general"), step_type=step_type,
+                dependencies=(previous_id,) if previous_id else (),
+                input={**task.input, "task_id": task.id, "category": intent.primary_category},
+            )
+        )
+        previous_id = step_id
+
+    if intent.risk in (RiskLevel.HIGH, RiskLevel.CRITICAL) and not has_review_step:
+        review_id = new_id("step")
+        steps.append(
+            PlanStep(
+                id=review_id, name=f"Revisão de risco: {intent.summary}"[:200],
+                description=(
+                    f"Review the work done for: {task.description or task.title}. "
+                    "This task was classified as high/critical risk; confirm the "
+                    "change is safe before it is considered complete."
+                ),
+                required_capability="analysis", step_type="review",
+                dependencies=(previous_id,) if previous_id else (),
+                input={**task.input, "task_id": task.id, "category": "analysis"},
+            )
+        )
+
+    return ExecutionPlan(
+        task_id=task.id, intent=intent, steps=steps, strategy="automatic", source="playbook",
+        playbook_version_id=match.version_id,
+    )
 
 
 __all__ = [

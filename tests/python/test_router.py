@@ -30,7 +30,7 @@ def _make_router(*, registered_providers: tuple[str, ...] = ("mock",), weights: 
 
 async def test_coding_routes_to_a_coding_capable_agent() -> None:
     router = _make_router()
-    decision = router.route(_step("coding"))
+    decision = await router.route(_step("coding"))
     agent = AgentRegistry().get(decision.agent_id)
     assert agent is not None
     assert any(c.name == "coding" for c in agent.capabilities)
@@ -39,27 +39,27 @@ async def test_coding_routes_to_a_coding_capable_agent() -> None:
 async def test_no_candidates_raises_not_found() -> None:
     router = _make_router(registered_providers=())
     with pytest.raises(NotFoundError):
-        router.route(_step("coding"))
+        await router.route(_step("coding"))
 
 
 async def test_unregistered_provider_is_excluded() -> None:
     # agent_codex_developer needs "openai"; only mock is registered, so it
     # must never be selected even though its capability matches.
     router = _make_router(registered_providers=("mock",))
-    decision = router.route(_step("coding"))
+    decision = await router.route(_step("coding"))
     assert decision.provider == "mock"
 
 
 async def test_explicit_assigned_agent_overrides_capability_routing() -> None:
     router = _make_router(registered_providers=("mock",))
-    decision = router.route(_step("general", assigned_agent_id="agent_generalist"))
+    decision = await router.route(_step("general", assigned_agent_id="agent_generalist"))
     assert decision.agent_id == "agent_generalist"
 
 
 async def test_assigned_agent_not_registered_raises_not_found() -> None:
     router = _make_router(registered_providers=("mock",))
     with pytest.raises(NotFoundError):
-        router.route(_step("coding", assigned_agent_id="agent_codex_developer"))
+        await router.route(_step("coding", assigned_agent_id="agent_codex_developer"))
 
 
 async def test_exclude_agent_ids_removes_candidate_for_fallback() -> None:
@@ -74,10 +74,10 @@ async def test_exclude_agent_ids_removes_candidate_for_fallback() -> None:
     )
     router = Router(registry, ModelRegistry(), pool, health)
 
-    first = router.route(_step("coding"))
+    first = await router.route(_step("coding"))
     assert first.agent_id == "agent_coder"
 
-    second = router.route(_step("coding"), exclude_agent_ids=frozenset({"agent_coder"}))
+    second = await router.route(_step("coding"), exclude_agent_ids=frozenset({"agent_coder"}))
     assert second.agent_id != "agent_coder"
 
 
@@ -88,10 +88,10 @@ async def test_degraded_provider_scores_lower_than_healthy_one() -> None:
     router = Router(AgentRegistry(), ModelRegistry(), pool, health)
 
     step = _step("coding")
-    baseline = router.route(step)
+    baseline = await router.route(step)
 
     await health.report_failure("mock", ProviderTimeoutError("slow"))
-    degraded = router.route(step)
+    degraded = await router.route(step)
     assert degraded.score < baseline.score
 
 
@@ -100,19 +100,19 @@ async def test_risk_review_bonus_favors_review_step_scoring() -> None:
     normal_step = _step("analysis", step_type="implementation")
     review_step = _step("analysis", step_type="review")
 
-    normal_decision = router.route(normal_step, risk=RiskLevel.HIGH)
-    review_decision = router.route(review_step, risk=RiskLevel.HIGH)
+    normal_decision = await router.route(normal_step, risk=RiskLevel.HIGH)
+    review_decision = await router.route(review_step, risk=RiskLevel.HIGH)
     assert review_decision.score > normal_decision.score
 
 
 async def test_reason_is_human_readable_and_non_empty() -> None:
     router = _make_router()
-    decision = router.route(_step("coding"))
+    decision = await router.route(_step("coding"))
     assert decision.reason
     assert decision.agent_id in decision.reason or "selecionado" in decision.reason.lower()
 
 
 async def test_alternatives_exclude_the_winner() -> None:
     router = _make_router()
-    decision = router.route(_step("general"))
+    decision = await router.route(_step("general"))
     assert decision.agent_id not in decision.alternatives

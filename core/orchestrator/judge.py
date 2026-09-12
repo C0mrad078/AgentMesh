@@ -91,7 +91,7 @@ class Judge:
             required_capability="analysis",
             step_type="review",
         )
-        decision = self._router.route(pseudo_step, risk=risk)
+        decision = await self._router.route(pseudo_step, risk=risk)
         agent = self._agents.get(decision.agent_id)
         if agent is None or not self._pool.is_registered(decision.provider):
             return self._heuristic_pick(successful)

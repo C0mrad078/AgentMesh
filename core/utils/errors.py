@@ -31,6 +31,7 @@ class ErrorCode(str, Enum):
     TOOL_EXECUTION_ERROR = "TOOL_EXECUTION_ERROR"
     VERIFICATION_ERROR = "VERIFICATION_ERROR"
     BUDGET_EXCEEDED_ERROR = "BUDGET_EXCEEDED_ERROR"
+    IMMUTABLE_POLICY_VIOLATION = "IMMUTABLE_POLICY_VIOLATION"
     PATH_TRAVERSAL_DENIED = "PATH_TRAVERSAL_DENIED"
     TOOL_DENIED = "TOOL_DENIED"
     DATABASE_ERROR = "DATABASE_ERROR"
@@ -161,6 +162,17 @@ class VerificationError(OrchestratorError):
 
 class BudgetExceededError(OrchestratorError):
     code = ErrorCode.BUDGET_EXCEEDED_ERROR
+
+
+class ImmutablePolicyError(OrchestratorError):
+    """Raised when an automated caller (the Learning Engine, Prompt
+    Optimizer, or a Learned Rule) attempts to touch something the Safety
+    Layer marks off-limits: the Core Prompt, a pinned rule, a Quality Gate,
+    or a permission/safety-reducing change. This is a hard stop, not a
+    warning -- see `core.learning.safety.SafetyValidator`.
+    """
+
+    code = ErrorCode.IMMUTABLE_POLICY_VIOLATION
 
 
 class PathTraversalError(OrchestratorError):

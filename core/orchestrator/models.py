@@ -121,7 +121,8 @@ class ExecutionPlan:
     intent: Intent
     steps: list[PlanStep]
     strategy: str = "automatic"
-    source: str = "rule_based"  # "rule_based" | "ai"
+    source: str = "rule_based"  # "rule_based" | "ai" | "playbook"
+    playbook_version_id: str | None = None
 
 
 @dataclass(frozen=True)

@@ -59,5 +59,40 @@ class BridgeCommand(str, Enum):
     BUDGET_GET = "budget.get"
     BUDGET_SET = "budget.set"
 
+    LEARNING_RULES_LIST = "learning.rules.list"
+    LEARNING_RULE_PIN = "learning.rules.pin"
+    LEARNING_RULE_UNPIN = "learning.rules.unpin"
+    LEARNING_RULE_ROLLBACK = "learning.rules.rollback"
+    LEARNING_RULE_CREATE = "learning.rules.create"
+    LEARNING_CANDIDATES_LIST = "learning.candidates.list"
+    LEARNING_CANDIDATE_APPROVE = "learning.candidates.approve"
+    LEARNING_CANDIDATE_REJECT = "learning.candidates.reject"
+    LEARNING_POLICY_GET = "learning.policy.get"
+    LEARNING_POLICY_SET = "learning.policy.set"
+    LEARNING_EVENTS_LIST = "learning.events.list"
+    LEARNING_EXPORT = "learning.export"
+    LEARNING_RESET = "learning.reset"
+
+    PLAYBOOK_LIST = "playbook.list"
+    PLAYBOOK_VERSIONS_LIST = "playbook.versions.list"
+
+    MODEL_PERFORMANCE_LIST = "model_performance.list"
+
+    REFLECTION_LIST_FOR_EXECUTION = "reflection.list"
+    REFLECTION_RECENT = "reflection.recent"
+
+    PROMPT_VERSIONS_LIST = "prompt.versions.list"
+    PROMPT_ROLLBACK = "prompt.rollback"
+    PROMPT_EVALUATIONS_LIST = "prompt.evaluations.list"
+    PROMPT_PROPOSALS_LIST = "prompt.proposals.list"
+    PROMPT_PROPOSALS_APPLY = "prompt.proposals.apply"
+
+    EXECUTION_FEEDBACK_SUBMIT = "execution.feedback.submit"
+
+    MEMORY_LIST = "memory.list"
+    MEMORY_HISTORY = "memory.history"
+
+    CONTEXT_OPTIMIZER_SUGGESTIONS = "context_optimizer.suggestions"
+
 
 ALL_COMMANDS: frozenset[str] = frozenset(member.value for member in BridgeCommand)

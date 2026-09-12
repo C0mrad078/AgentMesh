@@ -219,3 +219,202 @@ export interface ExecutionEventRecord {
   payload: Record<string, unknown>;
   created_at: string;
 }
+
+// --- Stage 3: reflection, learning, playbooks, memory -----------------------
+
+export type RuleStatus = "candidate" | "observing" | "active" | "deprecated" | "rejected" | "archived";
+export type RulePriority = "critical" | "high" | "normal" | "low";
+export type LearningMode = "manual" | "assisted" | "autonomous";
+
+export interface LearnedRule {
+  id: string;
+  project_id: string | null;
+  title: string;
+  category: string;
+  action: { effect?: string; agent_id?: string; magnitude?: number } | Record<string, unknown>;
+  scope_type: string;
+  scope_value: string | null;
+  priority: RulePriority;
+  status: RuleStatus;
+  confidence: number;
+  observations: number;
+  successes: number;
+  failures: number;
+  distinct_projects: string[];
+  pinned: boolean;
+  source: string;
+  last_observed_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LearningCandidate {
+  id: string;
+  category: string;
+  title: string;
+  rule_text: string;
+  scope_type: string;
+  scope_value: string | null;
+  normalized_key: string;
+  observations: number;
+  successes: number;
+  failures: number;
+  distinct_projects: string[];
+  confidence: number;
+  status: "candidate" | "observing" | "promoted" | "rejected";
+  promoted_rule_id: string | null;
+  rejection_reason: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LearningPolicy {
+  id: string;
+  mode: LearningMode;
+  minimum_observations_for_activation: number;
+  minimum_confidence: number;
+  auto_apply_categories: string[];
+  requires_approval_categories: string[];
+  max_changes_per_day: number;
+  rollback_threshold: number;
+  updated_at: string;
+}
+
+export interface LearningEvent {
+  id: string;
+  event_type: string;
+  target_type: string;
+  target_id: string;
+  actor: string;
+  evidence: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface PlaybookVersion {
+  id: string;
+  playbook_id: string;
+  version: number;
+  strategy: { capability: string; step_type: string; description: string }[];
+  confidence: number;
+  active: boolean;
+  reason: string;
+  observations: number;
+  successes: number;
+  created_at: string;
+}
+
+export interface Playbook {
+  id: string;
+  task_type: string;
+  name: string;
+  conditions: string[];
+  status: "active" | "deprecated";
+  origin: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ModelPerformanceSummary {
+  provider: string;
+  model: string;
+  agent_id: string;
+  task_category: string;
+  risk: string;
+  executions: number;
+  success_rate: number;
+  verified_success_rate: number;
+  failure_rate: number;
+  retry_rate: number;
+  avg_latency_seconds: number;
+  p50_latency_seconds: number;
+  p95_latency_seconds: number;
+  avg_input_tokens: number;
+  avg_output_tokens: number;
+  avg_cost_usd: number;
+  avg_iterations: number;
+  review_rejection_rate: number;
+}
+
+export interface ContextSuggestion {
+  task_category: string;
+  samples: number;
+  avg_files_included: number;
+  avg_files_used: number;
+  usage_ratio: number;
+  suggestion: "reduce" | "expand" | "priorize";
+  detail: string;
+  rarely_used_extensions: string[];
+}
+
+export interface ReflectionRecord {
+  id: string;
+  execution_id: string;
+  task_id: string | null;
+  depth: "light" | "full";
+  overall_score: number;
+  findings: { question: string; answer: string; evidence: string }[];
+  successful_patterns: string[];
+  problems: string[];
+  improvement_candidates: { category: string; title: string; rule_text: string }[];
+  routing_feedback: string[];
+  prompt_feedback: string[];
+  cost_feedback: string[];
+  context_feedback: string[];
+  ai_narrative: string | null;
+  reflection_cost_usd: number;
+  created_at: string;
+}
+
+export type PromptType = "core" | "agent" | "planner" | "router" | "verifier" | "reflection" | "synthesizer";
+
+export interface PromptVersion {
+  id: string;
+  owner_key: string;
+  agent_id: string | null;
+  prompt_type: PromptType;
+  name: string;
+  version: number;
+  content: string;
+  author: string;
+  origin: string;
+  reason: string;
+  previous_version_id: string | null;
+  protected: boolean;
+  active: boolean;
+  created_at: string;
+}
+
+export interface PromptProposalEvent {
+  id: string;
+  event_type: "prompt_proposal_generated";
+  target_type: string;
+  target_id: string;
+  actor: string;
+  evidence: {
+    owner_key: string;
+    prompt_type: PromptType;
+    agent_id: string | null;
+    current_version_id: string;
+    proposed_content: string;
+    reason: string;
+    evidence_summary: string;
+  };
+  created_at: string;
+}
+
+export interface MemoryRecordItem {
+  id: string;
+  project_id: string;
+  kind: string;
+  category: string;
+  key: string;
+  value: Record<string, unknown>;
+  importance: number;
+  confidence: number;
+  provenance: { source_execution_id: string | null; source_file: string | null; source_user_input: boolean };
+  valid_from: string | null;
+  valid_until: string | null;
+  superseded_by: string | null;
+  created_at: string;
+  updated_at: string;
+}

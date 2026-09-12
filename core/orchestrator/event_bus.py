@@ -52,6 +52,9 @@ class EventType(str, Enum):
     EXECUTION_COMPLETED = "execution.completed"
     EXECUTION_FAILED = "execution.failed"
     EXECUTION_CANCELLED = "execution.cancelled"
+    REFLECTION_STARTED = "reflection.started"
+    REFLECTION_COMPLETED = "reflection.completed"
+    LEARNING_UPDATED = "learning.updated"
 
 
 @dataclass(frozen=True)

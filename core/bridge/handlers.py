@@ -13,6 +13,7 @@ from dataclasses import asdict
 from typing import Any
 
 from core.bridge.context import BridgeContext
+from core.learning.prompt_optimizer import PromptProposal
 from core.orchestrator.budget import BudgetLimits
 from core.projects.models import ProjectCreate, ProjectUpdate
 from core.providers.base import AIRequest, ConnectionTestResult
@@ -425,6 +426,314 @@ async def _budget_set(params: dict[str, Any], ctx: BridgeContext) -> dict[str, A
     ctx.budget.update_limits(limits)
     await ctx.audit_logger.log("budget.set", "budget", None, asdict(limits))
     return asdict(limits)
+
+
+# --- learning: rules ---------------------------------------------------------
+
+
+@handler(BridgeCommand.LEARNING_RULES_LIST)
+async def _learning_rules_list(params: dict[str, Any], ctx: BridgeContext) -> list[dict[str, Any]]:
+    status = params.get("status")
+    if status:
+        return await ctx.learned_rules_repo.list_by_status(str(status))
+    return await ctx.learned_rules_repo.list_all()
+
+
+@handler(BridgeCommand.LEARNING_RULE_PIN)
+async def _learning_rule_pin(params: dict[str, Any], ctx: BridgeContext) -> dict[str, Any]:
+    rule_id = _require_str(params, "rule_id")
+    await ctx.learning_engine.set_pinned(rule_id, True)
+    rule = await ctx.learned_rules_repo.get(rule_id)
+    if rule is None:
+        raise ValidationError(f"Rule '{rule_id}' not found.")
+    return rule
+
+
+@handler(BridgeCommand.LEARNING_RULE_UNPIN)
+async def _learning_rule_unpin(params: dict[str, Any], ctx: BridgeContext) -> dict[str, Any]:
+    rule_id = _require_str(params, "rule_id")
+    await ctx.learning_engine.set_pinned(rule_id, False)
+    rule = await ctx.learned_rules_repo.get(rule_id)
+    if rule is None:
+        raise ValidationError(f"Rule '{rule_id}' not found.")
+    return rule
+
+
+@handler(BridgeCommand.LEARNING_RULE_ROLLBACK)
+async def _learning_rule_rollback(params: dict[str, Any], ctx: BridgeContext) -> dict[str, Any]:
+    rule_id = _require_str(params, "rule_id")
+    reason = str(params.get("reason") or "rollback solicitado pelo usuário")
+    await ctx.learning_engine.rollback_rule(rule_id, reason=reason)
+    rule = await ctx.learned_rules_repo.get(rule_id)
+    if rule is None:
+        raise ValidationError(f"Rule '{rule_id}' not found.")
+    return rule
+
+
+@handler(BridgeCommand.LEARNING_RULE_CREATE)
+async def _learning_rule_create(params: dict[str, Any], ctx: BridgeContext) -> dict[str, Any]:
+    return await ctx.learning_engine.create_user_rule(
+        title=_require_str(params, "title"), category=_require_str(params, "category"),
+        rule_text=_require_str(params, "rule_text"), scope_type=str(params.get("scope_type", "global")),
+        scope_value=params.get("scope_value"), priority=str(params.get("priority", "normal")),
+    )
+
+
+# --- learning: candidates -----------------------------------------------------
+
+
+@handler(BridgeCommand.LEARNING_CANDIDATES_LIST)
+async def _learning_candidates_list(_params: dict[str, Any], ctx: BridgeContext) -> list[dict[str, Any]]:
+    return await ctx.learning_candidates_repo.list_all()
+
+
+@handler(BridgeCommand.LEARNING_CANDIDATE_APPROVE)
+async def _learning_candidate_approve(params: dict[str, Any], ctx: BridgeContext) -> dict[str, Any]:
+    candidate_id = _require_str(params, "candidate_id")
+    return await ctx.learning_engine.approve_candidate(candidate_id)
+
+
+@handler(BridgeCommand.LEARNING_CANDIDATE_REJECT)
+async def _learning_candidate_reject(params: dict[str, Any], ctx: BridgeContext) -> dict[str, Any]:
+    candidate_id = _require_str(params, "candidate_id")
+    reason = str(params.get("reason") or "rejeitado pelo usuário")
+    await ctx.learning_engine.reject_candidate(candidate_id, reason=reason)
+    candidate = await ctx.learning_candidates_repo.get(candidate_id)
+    if candidate is None:
+        raise ValidationError(f"Candidate '{candidate_id}' not found.")
+    return candidate
+
+
+# --- learning: policy ----------------------------------------------------------
+
+
+@handler(BridgeCommand.LEARNING_POLICY_GET)
+async def _learning_policy_get(_params: dict[str, Any], ctx: BridgeContext) -> dict[str, Any]:
+    return await ctx.learning_policy_repo.get()
+
+
+@handler(BridgeCommand.LEARNING_POLICY_SET)
+async def _learning_policy_set(params: dict[str, Any], ctx: BridgeContext) -> dict[str, Any]:
+    return await ctx.learning_policy_repo.update(
+        mode=params.get("mode"),
+        minimum_observations_for_activation=params.get("minimum_observations_for_activation"),
+        minimum_confidence=params.get("minimum_confidence"),
+        auto_apply_categories=params.get("auto_apply_categories"),
+        requires_approval_categories=params.get("requires_approval_categories"),
+        max_changes_per_day=params.get("max_changes_per_day"),
+        rollback_threshold=params.get("rollback_threshold"),
+    )
+
+
+@handler(BridgeCommand.LEARNING_EVENTS_LIST)
+async def _learning_events_list(params: dict[str, Any], ctx: BridgeContext) -> list[dict[str, Any]]:
+    limit = int(params.get("limit", 50))
+    return await ctx.learning_events_repo.list_recent(limit)
+
+
+@handler(BridgeCommand.LEARNING_EXPORT)
+async def _learning_export(_params: dict[str, Any], ctx: BridgeContext) -> dict[str, Any]:
+    return {
+        "rules": await ctx.learned_rules_repo.list_all(),
+        "candidates": await ctx.learning_candidates_repo.list_all(),
+        "playbooks": await _export_playbooks(ctx),
+        "policy": await ctx.learning_policy_repo.get(),
+    }
+
+
+async def _export_playbooks(ctx: BridgeContext) -> list[dict[str, Any]]:
+    result = []
+    for playbook in await ctx.playbooks_repo.list_all():
+        versions = await ctx.playbook_versions_repo.list_for_playbook(playbook["id"])
+        result.append({"playbook": playbook, "versions": versions})
+    return result
+
+
+@handler(BridgeCommand.LEARNING_RESET)
+async def _learning_reset(params: dict[str, Any], ctx: BridgeContext) -> dict[str, Any]:
+    if not params.get("confirm"):
+        raise ValidationError("Reset requires 'confirm': true.")
+    scope = str(params.get("scope", "learned_rules"))
+    if scope not in ("learned_rules", "metrics", "playbooks", "full"):
+        raise ValidationError(f"Unknown reset scope '{scope}'.")
+
+    reset_kinds: list[str] = []
+    if scope in ("learned_rules", "full"):
+        for rule in await ctx.learned_rules_repo.list_all():
+            await ctx.learned_rules_repo.update_status(rule["id"], "archived")
+        reset_kinds.append("learned_rules")
+    if scope in ("metrics", "full"):
+        await ctx.db.execute("DELETE FROM model_performance")
+        reset_kinds.append("metrics")
+    if scope in ("playbooks", "full"):
+        for playbook in await ctx.playbooks_repo.list_all():
+            await ctx.playbooks_repo.deprecate(playbook["id"])
+        reset_kinds.append("playbooks")
+
+    await ctx.audit_logger.log("learning.reset", "learning", None, {"scope": scope})
+    return {"reset": reset_kinds}
+
+
+# --- playbooks -----------------------------------------------------------------
+
+
+@handler(BridgeCommand.PLAYBOOK_LIST)
+async def _playbook_list(_params: dict[str, Any], ctx: BridgeContext) -> list[dict[str, Any]]:
+    return await ctx.playbooks_repo.list_all()
+
+
+@handler(BridgeCommand.PLAYBOOK_VERSIONS_LIST)
+async def _playbook_versions_list(params: dict[str, Any], ctx: BridgeContext) -> list[dict[str, Any]]:
+    playbook_id = _require_str(params, "playbook_id")
+    return await ctx.playbook_versions_repo.list_for_playbook(playbook_id)
+
+
+# --- model performance ----------------------------------------------------------
+
+
+@handler(BridgeCommand.MODEL_PERFORMANCE_LIST)
+async def _model_performance_list(_params: dict[str, Any], ctx: BridgeContext) -> list[dict[str, Any]]:
+    return await ctx.performance_tracker.list_all_summaries()
+
+
+# --- reflections -----------------------------------------------------------------
+
+
+@handler(BridgeCommand.REFLECTION_LIST_FOR_EXECUTION)
+async def _reflection_list_for_execution(params: dict[str, Any], ctx: BridgeContext) -> list[dict[str, Any]]:
+    execution_id = _require_str(params, "execution_id")
+    return await ctx.reflections_repo.list_for_execution(execution_id)
+
+
+@handler(BridgeCommand.REFLECTION_RECENT)
+async def _reflection_recent(params: dict[str, Any], ctx: BridgeContext) -> list[dict[str, Any]]:
+    limit = int(params.get("limit", 20))
+    return await ctx.reflections_repo.list_recent(limit)
+
+
+# --- prompts -----------------------------------------------------------------
+
+
+@handler(BridgeCommand.PROMPT_VERSIONS_LIST)
+async def _prompt_versions_list(params: dict[str, Any], ctx: BridgeContext) -> list[dict[str, Any]]:
+    owner_key = _require_str(params, "owner_key")
+    return await ctx.prompt_registry.list_versions_by_key(owner_key)
+
+
+@handler(BridgeCommand.PROMPT_ROLLBACK)
+async def _prompt_rollback(params: dict[str, Any], ctx: BridgeContext) -> dict[str, Any]:
+    owner_key = _require_str(params, "owner_key")
+    target_version_id = _require_str(params, "target_version_id")
+    reason = str(params.get("reason") or "rollback solicitado pelo usuário")
+    version = await ctx.prompt_registry.rollback(owner_key, target_version_id, reason=reason)
+    await ctx.audit_logger.log(
+        "prompt.rollback", "prompt_version", version["id"],
+        {"owner_key": owner_key, "target_version_id": target_version_id},
+    )
+    return version
+
+
+@handler(BridgeCommand.PROMPT_EVALUATIONS_LIST)
+async def _prompt_evaluations_list(params: dict[str, Any], ctx: BridgeContext) -> list[dict[str, Any]]:
+    prompt_version_id = _require_str(params, "prompt_version_id")
+    return await ctx.prompt_evaluations_repo.list_for_prompt_version(prompt_version_id)
+
+
+@handler(BridgeCommand.PROMPT_PROPOSALS_LIST)
+async def _prompt_proposals_list(params: dict[str, Any], ctx: BridgeContext) -> list[dict[str, Any]]:
+    limit = int(params.get("limit", 50))
+    events = await ctx.learning_events_repo.list_recent(limit)
+    return [e for e in events if e["event_type"] == "prompt_proposal_generated"]
+
+
+@handler(BridgeCommand.PROMPT_PROPOSALS_APPLY)
+async def _prompt_proposals_apply(params: dict[str, Any], ctx: BridgeContext) -> dict[str, Any]:
+    event_id = _require_str(params, "event_id")
+    events = await ctx.learning_events_repo.list_recent(500)
+    event = next((e for e in events if e["id"] == event_id and e["event_type"] == "prompt_proposal_generated"), None)
+    if event is None:
+        raise ValidationError(f"Prompt proposal event '{event_id}' not found.")
+
+    proposal = PromptProposal(
+        owner_key=event["evidence"]["owner_key"], prompt_type=event["evidence"]["prompt_type"],
+        agent_id=event["evidence"]["agent_id"], current_version_id=event["evidence"]["current_version_id"],
+        current_content="", proposed_content=event["evidence"]["proposed_content"],
+        reason=event["evidence"]["reason"], evidence_summary=event["evidence"]["evidence_summary"],
+    )
+    evaluation = await ctx.prompt_optimizer.evaluate(proposal)
+    if not evaluation.allowed:
+        raise ValidationError(f"Proposal no longer passes safety/regression checks: {evaluation.reason}")
+
+    version = await ctx.prompt_optimizer.create_candidate_version(proposal, evaluation, author="user")
+    if version is None:
+        raise ValidationError("Failed to apply the proposal.")
+    await ctx.audit_logger.log("prompt.proposal.applied", "prompt_version", version["id"], {"owner_key": proposal.owner_key})
+    return version
+
+
+# --- user feedback -----------------------------------------------------------------
+
+
+@handler(BridgeCommand.EXECUTION_FEEDBACK_SUBMIT)
+async def _execution_feedback_submit(params: dict[str, Any], ctx: BridgeContext) -> dict[str, Any]:
+    execution_id = _require_str(params, "execution_id")
+    rating = _require_str(params, "rating")
+    if rating not in ("up", "down"):
+        raise ValidationError("'rating' must be 'up' or 'down'.")
+    return await ctx.user_feedback_repo.record(
+        execution_id, rating=rating, feedback_type=params.get("feedback_type"),
+        comment=params.get("comment"),
+    )
+
+
+# --- project memory -----------------------------------------------------------------
+
+
+@handler(BridgeCommand.MEMORY_LIST)
+async def _memory_list(params: dict[str, Any], ctx: BridgeContext) -> list[dict[str, Any]]:
+    project_id = _require_str(params, "project_id")
+    records = await ctx.memory_store.recall_all(project_id)
+    return [r.model_dump(mode="json") for r in records]
+
+
+@handler(BridgeCommand.MEMORY_HISTORY)
+async def _memory_history(params: dict[str, Any], ctx: BridgeContext) -> list[dict[str, Any]]:
+    project_id = _require_str(params, "project_id")
+    key = _require_str(params, "key")
+    records = await ctx.memory_store.history(project_id, key)
+    return [r.model_dump(mode="json") for r in records]
+
+
+# --- context optimizer -----------------------------------------------------------------
+
+
+@handler(BridgeCommand.CONTEXT_OPTIMIZER_SUGGESTIONS)
+async def _context_optimizer_suggestions(params: dict[str, Any], ctx: BridgeContext) -> list[dict[str, Any]]:
+    limit = int(params.get("limit", 500))
+    entries = await ctx.context_metrics_repo.list_recent(limit)
+    if not entries:
+        return []
+
+    category_by_step: dict[str, str] = {}
+    plan_cache: dict[str, dict] = {}
+    for entry in entries:
+        execution_id = entry["execution_id"]
+        if execution_id not in plan_cache:
+            execution = await ctx.executions_repo.get(execution_id)
+            plan_cache[execution_id] = execution.plan if execution else {}
+        for step in plan_cache[execution_id].get("steps", []):
+            category_by_step[step["id"]] = step.get("input", {}).get("category", "general")
+
+    suggestions = ctx.context_optimizer.analyze(entries, category_by_step=category_by_step)
+    return [
+        {
+            "task_category": s.task_category, "samples": s.samples,
+            "avg_files_included": s.avg_files_included, "avg_files_used": s.avg_files_used,
+            "usage_ratio": s.usage_ratio, "suggestion": s.suggestion, "detail": s.detail,
+            "rarely_used_extensions": list(s.rarely_used_extensions),
+        }
+        for s in suggestions
+    ]
 
 
 # --- helpers -----------------------------------------------------------------

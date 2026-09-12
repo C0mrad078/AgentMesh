@@ -6,16 +6,24 @@ candidate agent capable of the step's `required_capability` is scored on
 multiple signals, and the highest-scoring one wins:
 
     score = capability_match
+          + historical_verified_success (Stage 3, shrunk toward neutral
+            for small samples -- see `core.learning.model_performance`)
+          + learned_rule_adjustment (Stage 3 -- see `core.learning.rule_resolver`)
           + availability (provider health)
           + priority (model's configured priority)
           + structured_output bonus
+          + exploration jitter (Stage 3, low-risk only, damped as
+            observations accumulate -- keeps the Router from permanently
+            fixating on whichever model happened to look best early on)
           - cost_penalty (proportional to the model's per-call cost estimate)
           - failure_penalty (provider is rate-limited/unavailable)
 
-Stage 2 has no execution history yet (that is Stage 3's Reflection Engine),
-so `historical_quality` is a fixed, configurable weight rather than a
-learned one -- the hook exists (`RoutingWeights.historical_quality`) but is
-inert until there is data to feed it.
+`historical_quality`/exploration only activate once `performance_tracker`/
+`rule_resolver` are actually wired in (see `core.bridge.context`); every
+call site that constructs a `Router` without them (all of Stage 1/2's
+tests) gets byte-identical scoring to before -- this is deliberate, so
+"aprendizado não deve dominar" holds even in the degenerate case of zero
+history, and so Stage 2's Router test suite needed no changes.
 
 A short, human-readable `reason` is always recorded alongside the decision
 (persisted via `core.database.repositories.routing_decisions_repo`) -- e.g.
@@ -25,11 +33,14 @@ risco alto." This is a summary of the decision, not the model's reasoning.
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Iterable
 from dataclasses import dataclass
 
 from core.agents.models import Agent
 from core.agents.registry import AgentRegistry
+from core.learning.model_performance import ModelPerformanceTracker
+from core.learning.rule_resolver import RuleResolver
 from core.orchestrator.models import PlanStep, RiskLevel, RoutingDecision
 from core.providers.base import ProviderHealthStatus
 from core.providers.health import ProviderHealthMonitor
@@ -38,18 +49,21 @@ from core.providers.registry import ModelInfo, ModelRegistry
 from core.utils.errors import NotFoundError
 
 _FALLBACK_AGENT_ID = "agent_generalist"
+_MIN_OBSERVATIONS_FOR_FULL_WEIGHT = 10.0
 
 
 @dataclass(frozen=True)
 class RoutingWeights:
     capability_match: float = 10.0
-    historical_quality: float = 0.0
+    historical_quality: float = 4.0
     availability: float = 5.0
     structured_output_bonus: float = 1.5
     priority_weight: float = 1.0
     cost_penalty: float = 0.5
     failure_penalty: float = 8.0
     risk_review_bonus: float = 3.0
+    learned_rule_weight: float = 2.0
+    exploration_weight: float = 0.6
 
 
 @dataclass(frozen=True)
@@ -60,6 +74,13 @@ class _Candidate:
     reason: str
 
 
+def _stable_jitter(*parts: str) -> float:
+    """A deterministic pseudo-random value in [-0.5, 0.5] -- exploration
+    without flaky, non-reproducible test behavior."""
+    digest = hashlib.sha256("|".join(parts).encode()).digest()
+    return (int.from_bytes(digest[:4], "big") / 0xFFFFFFFF) - 0.5
+
+
 class Router:
     def __init__(
         self,
@@ -68,21 +89,37 @@ class Router:
         provider_pool: ProviderPool,
         health_monitor: ProviderHealthMonitor,
         weights: RoutingWeights | None = None,
+        *,
+        performance_tracker: ModelPerformanceTracker | None = None,
+        rule_resolver: RuleResolver | None = None,
     ) -> None:
         self._agents = agent_registry
         self._models = model_registry
         self._pool = provider_pool
         self._health = health_monitor
         self._weights = weights or RoutingWeights()
+        self._performance = performance_tracker
+        self._rules = rule_resolver
 
-    def route(
+    async def route(
         self,
         step: PlanStep,
         *,
         risk: RiskLevel = RiskLevel.LOW,
+        project_id: str | None = None,
         exclude_agent_ids: frozenset[str] = frozenset(),
     ) -> RoutingDecision:
-        candidates = self._build_candidates(step, risk=risk, exclude_agent_ids=exclude_agent_ids)
+        category = step.input.get("category") if isinstance(step.input, dict) else None
+        rule_adjustments: dict[str, tuple[float, str]] = {}
+        if self._rules is not None:
+            adjustments = await self._rules.routing_adjustments(category=category, project_id=project_id)
+            for adj in adjustments:
+                rule_adjustments[adj.agent_id] = (adj.delta, adj.reason)
+
+        candidates = await self._build_candidates(
+            step, risk=risk, exclude_agent_ids=exclude_agent_ids, category=category,
+            rule_adjustments=rule_adjustments,
+        )
         if not candidates:
             raise NotFoundError(
                 f"No agent/provider/model combination is available for step '{step.id}' "
@@ -103,17 +140,28 @@ class Router:
             alternatives=alternatives,
         )
 
-    def _build_candidates(
-        self, step: PlanStep, *, risk: RiskLevel, exclude_agent_ids: frozenset[str]
+    async def _build_candidates(
+        self,
+        step: PlanStep,
+        *,
+        risk: RiskLevel,
+        exclude_agent_ids: frozenset[str],
+        category: str | None,
+        rule_adjustments: dict[str, tuple[float, str]],
     ) -> list[_Candidate]:
         if step.assigned_agent_id:
             explicit = self._agents.get(step.assigned_agent_id)
             pool = [explicit] if explicit else []
-            candidates = self._score_pool(pool, step, risk=risk, exclude_agent_ids=exclude_agent_ids)
-            return candidates
+            return await self._score_pool(
+                pool, step, risk=risk, exclude_agent_ids=exclude_agent_ids, category=category,
+                rule_adjustments=rule_adjustments,
+            )
 
         pool = self._agents.find_by_capability(step.required_capability)
-        candidates = self._score_pool(pool, step, risk=risk, exclude_agent_ids=exclude_agent_ids)
+        candidates = await self._score_pool(
+            pool, step, risk=risk, exclude_agent_ids=exclude_agent_ids, category=category,
+            rule_adjustments=rule_adjustments,
+        )
         if candidates:
             return candidates
 
@@ -122,15 +170,20 @@ class Router:
         # only *then* fall back to the generalist, so a fallback/retry that
         # excludes the primary agent still has somewhere to go.
         fallback = self._agents.get(_FALLBACK_AGENT_ID)
-        return self._score_pool([fallback] if fallback else [], step, risk=risk, exclude_agent_ids=exclude_agent_ids)
+        return await self._score_pool(
+            [fallback] if fallback else [], step, risk=risk, exclude_agent_ids=exclude_agent_ids,
+            category=category, rule_adjustments=rule_adjustments,
+        )
 
-    def _score_pool(
+    async def _score_pool(
         self,
         pool: Iterable[Agent | None],
         step: PlanStep,
         *,
         risk: RiskLevel,
         exclude_agent_ids: frozenset[str],
+        category: str | None,
+        rule_adjustments: dict[str, tuple[float, str]],
     ) -> list[_Candidate]:
         candidates: list[_Candidate] = []
         for agent in pool:
@@ -141,7 +194,10 @@ class Router:
             model = self._resolve_model(agent, step.required_capability)
             if model is None:
                 continue
-            score, reason = self._score(agent, model, step, risk=risk)
+            score, reason = await self._score(
+                agent, model, step, risk=risk, category=category,
+                rule_adjustment=rule_adjustments.get(agent.id),
+            )
             candidates.append(_Candidate(agent=agent, model=model, score=score, reason=reason))
         return candidates
 
@@ -155,8 +211,15 @@ class Router:
         provider_models = self._models.for_provider(agent.provider)
         return provider_models[0] if provider_models else None
 
-    def _score(
-        self, agent: Agent, model: ModelInfo, step: PlanStep, *, risk: RiskLevel
+    async def _score(
+        self,
+        agent: Agent,
+        model: ModelInfo,
+        step: PlanStep,
+        *,
+        risk: RiskLevel,
+        category: str | None,
+        rule_adjustment: tuple[float, str] | None,
     ) -> tuple[float, str]:
         w = self._weights
         score = 0.0
@@ -187,6 +250,30 @@ class Router:
         if risk in (RiskLevel.HIGH, RiskLevel.CRITICAL) and step.step_type == "review":
             score += w.risk_review_bonus
             reasons.append("risco alto exige revisão")
+
+        observations = 0
+        if self._performance is not None:
+            rate, observations = await self._performance.get_verified_success_rate(
+                provider=agent.provider, model=model.model_id, agent_id=agent.id,
+                task_category=category or "general", risk=risk.value,
+            )
+            shrinkage = min(1.0, observations / _MIN_OBSERVATIONS_FOR_FULL_WEIGHT)
+            historical_term = w.historical_quality * shrinkage * (rate - 0.5) * 2
+            score += historical_term
+            if observations > 0 and abs(historical_term) > 0.5:
+                reasons.append(
+                    f"histórico de {observations} execuções ({rate:.0%} de sucesso verificado)"
+                )
+
+            if risk == RiskLevel.LOW:
+                jitter = w.exploration_weight * _stable_jitter(step.id, agent.id, model.model_id)
+                jitter /= 1.0 + observations
+                score += jitter
+
+        if rule_adjustment is not None:
+            delta, rule_reason = rule_adjustment
+            score += w.learned_rule_weight * delta
+            reasons.append(rule_reason)
 
         reason_text = ", ".join(reasons) if reasons else "melhor opção disponível para a etapa"
         return score, f"{agent.name} selecionado porque {reason_text}."

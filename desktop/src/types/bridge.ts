@@ -24,6 +24,7 @@ export type BridgeConnectionStatus =
   | { status: "connected" }
   | { status: "reconnecting"; attempt: number }
   | { status: "offline" }
+  | { status: "unavailable" }
   | { status: "error"; message: string };
 
 /** Payload of an `orchestrator://event` Tauri event with `event: "execution.progress"`. */

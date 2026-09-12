@@ -459,7 +459,13 @@ class ExecutionEngine:
             goal=task.description or task.title, plan=plan, step=step,
             previous_results=list(results_by_id.values()), workspace_path=workspace_path,
         )
-        tool_executor = ToolExecutor(workspace_path) if workspace_path else None
+        tool_executor = (
+            ToolExecutor(
+                workspace_path,
+                pre_authorized_operations=frozenset(task.input.get("confirmed_operations") or []),
+            )
+            if workspace_path else None
+        )
 
         result = await self._step_executor.run(
             step, routing, agent, system_prompt=system_prompt, context=context,
@@ -637,7 +643,13 @@ class ExecutionEngine:
             goal=task.description or task.title, plan=plan, step=correction_step,
             previous_results=results, workspace_path=workspace_path,
         )
-        tool_executor = ToolExecutor(workspace_path) if workspace_path else None
+        tool_executor = (
+            ToolExecutor(
+                workspace_path,
+                pre_authorized_operations=frozenset(task.input.get("confirmed_operations") or []),
+            )
+            if workspace_path else None
+        )
 
         correction_result = await self._step_executor.run(
             correction_step, routing, agent, system_prompt=system_prompt, context=context,

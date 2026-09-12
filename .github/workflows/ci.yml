@@ -1,0 +1,115 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A concurrent push to the same PR/branch cancels the previous run --
+# no point finishing a check against code that has already been superseded.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    name: Python (lint, typecheck, tests)
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+      - name: Install core + dev dependencies
+        run: pip install -e ".[dev]"
+      - name: ruff
+        run: ruff check core tests
+      - name: mypy
+        run: mypy core
+      - name: pytest (unit, integration, smoke)
+        run: pytest tests/python tests/integration tests/smoke -v
+
+  frontend:
+    name: Frontend (lint, typecheck, tests, build)
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: desktop/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm run test -- --run
+      - run: npm run build
+
+  rust:
+    name: Rust / Tauri (fmt, clippy, tests)
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: desktop/src-tauri
+    steps:
+      - uses: actions/checkout@v4
+      - if: runner.os == 'Linux'
+        name: Install Tauri Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+      - run: cargo fmt -- --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
+
+  security:
+    name: Security scans (secrets, dependency audit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Secret scan (gitleaks)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Python dependency audit
+        run: |
+          pip install -e ".[dev]" pip-audit
+          # Advisory only for now: report findings without failing the
+          # build on every transitive-dependency CVE, which would make CI
+          # flaky on advisories nobody has triaged yet. Ratchet this to
+          # `pip-audit` (no `|| true`) once the project has a documented
+          # process for triaging and allow-listing accepted findings.
+          pip-audit || true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: npm dependency audit
+        working-directory: desktop
+        run: npm audit --audit-level=high || true

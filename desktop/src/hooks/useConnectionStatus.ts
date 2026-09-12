@@ -25,6 +25,13 @@ export function describeConnectionStatus(status: BridgeConnectionStatus): Connec
       };
     case "offline":
       return { label: "Offline", tone: "destructive", isConnected: false, canRetry: true };
+    case "unavailable":
+      return {
+        label: "Núcleo indisponível (reiniciou várias vezes) -- tente reconectar manualmente",
+        tone: "destructive",
+        isConnected: false,
+        canRetry: true,
+      };
     case "error":
       return { label: `Erro: ${status.message}`, tone: "destructive", isConnected: false, canRetry: true };
   }

@@ -25,12 +25,15 @@ class ProjectAction(str, Enum):
     RUN_TESTS = "run_tests"
     RUN_BUILD = "run_build"
     RUN_LINT = "run_lint"
+    RUN_TYPECHECK = "run_typecheck"
+    INSTALL_DEPENDENCIES = "install_dependencies"
 
 
 _NODE_SCRIPT_NAMES: dict[ProjectAction, str] = {
     ProjectAction.RUN_TESTS: "test",
     ProjectAction.RUN_BUILD: "build",
     ProjectAction.RUN_LINT: "lint",
+    ProjectAction.RUN_TYPECHECK: "typecheck",
 }
 
 
@@ -54,8 +57,10 @@ class CommandPlanner:
         stacks = detect_stacks(self.workspace_root)
 
         if ProjectStack.NODE in stacks:
-            script_name = _NODE_SCRIPT_NAMES[action]
-            if script_name in self._node_scripts():
+            if action == ProjectAction.INSTALL_DEPENDENCIES and (self.workspace_root / "package.json").exists():
+                return ["npm", "install"]
+            script_name = _NODE_SCRIPT_NAMES.get(action)
+            if script_name and script_name in self._node_scripts():
                 return ["npm", "run", script_name]
 
         if ProjectStack.PYTHON in stacks:
@@ -63,18 +68,26 @@ class CommandPlanner:
                 return [sys.executable, "-m", "pytest"]
             if action == ProjectAction.RUN_LINT and _tool_configured(self.workspace_root, "ruff"):
                 return [sys.executable, "-m", "ruff", "check", "."]
+            if action == ProjectAction.RUN_TYPECHECK and _tool_configured(self.workspace_root, "mypy"):
+                return [sys.executable, "-m", "mypy", "."]
+            if action == ProjectAction.INSTALL_DEPENDENCIES and (self.workspace_root / "pyproject.toml").exists():
+                return [sys.executable, "-m", "pip", "install", "-e", "."]
 
         if ProjectStack.RUST in stacks:
             if action == ProjectAction.RUN_TESTS:
                 return ["cargo", "test"]
             if action == ProjectAction.RUN_BUILD:
                 return ["cargo", "build"]
+            if action == ProjectAction.INSTALL_DEPENDENCIES:
+                return ["cargo", "fetch"]
 
         if ProjectStack.GO in stacks:
             if action == ProjectAction.RUN_TESTS:
                 return ["go", "test", "./..."]
             if action == ProjectAction.RUN_BUILD:
                 return ["go", "build", "./..."]
+            if action == ProjectAction.INSTALL_DEPENDENCIES:
+                return ["go", "mod", "download"]
 
         return None
 

@@ -145,8 +145,7 @@ class StepExecutor:
             messages = [*messages, AIMessage(role=MessageRole.ASSISTANT, content=response.content)]
             for call in response.tool_calls:
                 tool_call_log.append(await self._run_tool_call(
-                    call, tool_executor, allowed_tools=allowed_tools, step=step, agent=agent,
-                    execution_id=execution_id,
+                    call, tool_executor, step=step, agent=agent, execution_id=execution_id,
                 ))
                 tool_result = tool_call_log[-1]
                 messages = [
@@ -182,7 +181,6 @@ class StepExecutor:
         call: ToolCallRequest,
         tool_executor: ToolExecutor,
         *,
-        allowed_tools: frozenset[str],
         step: PlanStep,
         agent: Agent,
         execution_id: str,
@@ -191,7 +189,7 @@ class StepExecutor:
             type=EventType.TOOL_STARTED, execution_id=execution_id,
             payload={"step_id": step.id, "agent_id": agent.id, "tool": call.name, "arguments": call.arguments},
         ))
-        result, duration = await tool_executor.execute(call, allowed_tools=allowed_tools)
+        result, duration = await tool_executor.execute(call, agent=agent)
         await self._events.publish(OrchestrationEvent(
             type=EventType.TOOL_COMPLETED, execution_id=execution_id,
             payload={

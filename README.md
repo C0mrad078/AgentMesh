@@ -1,16 +1,36 @@
 # Orquestrador
 
-**Orquestrador** é uma aplicação desktop multiplataforma (macOS e Windows, com
-Linux preparado para o futuro) que atuará como um agente autônomo de
+**Orquestrador** é uma aplicação desktop multiplataforma (macOS e Windows,
+Linux é possível na mesma base) que atua como um agente autônomo de
 coordenação de múltiplas inteligências artificiais (Claude, Gemini,
-Codex/OpenAI e outras).
+Codex/OpenAI) para tarefas reais de engenharia de software: planejar,
+implementar, testar, revisar, corrigir e aprender com o resultado.
 
-Este repositório contém o **Estágio 1** do projeto: a fundação completa da
-arquitetura — shell desktop, bridge, core de orquestração, banco de dados,
-resiliência e interface — funcionando de ponta a ponta com **provedores de
-IA mockados**. Nenhuma API de IA real está conectada ainda; o objetivo deste
-estágio é ter uma base sólida, testada e segura antes de integrar provedores
-reais no Estágio 2.
+Este repositório contém a primeira versão completa (v1.0) do projeto,
+construída em quatro estágios sobre a mesma arquitetura (nenhum estágio
+recriou o anterior):
+
+1. **Fundação** — shell desktop (Tauri + React), bridge Rust↔Python, core de
+   orquestração, banco de dados, segurança de caminho/segredos e interface,
+   validados de ponta a ponta com um provider mockado.
+2. **Providers e orquestração autônoma** — integração real com Claude,
+   Gemini e OpenAI/Codex por trás de uma abstração normalizada; Router,
+   Planner, Executor e Verifier orientados a evidência; cinco modos de
+   execução (Automático, Manual, Pipeline, Debate, Consenso); ferramentas,
+   orçamento e métricas.
+3. **Aprendizado** — Reflection Engine, Learning Engine com regras com ciclo
+   de vida completo, playbooks, versionamento de prompts (com o Core Prompt
+   protegido contra alteração automática) e desempenho por modelo/agente.
+4. **Hardening e produção** — Permission Engine com risco por operação,
+   ferramentas de arquivo/git endurecidas (escrita atômica, backup,
+   confirmação obrigatória para operações destrutivas), shell controlado
+   com limite de saída e término de árvore de processos, backup/restauração
+   e checagem de integridade do banco, recovery de crash, CI/CD e a
+   documentação em `docs/`.
+
+Veja `docs/ARCHITECTURE.md`, `docs/SECURITY.md`, `docs/DEVELOPMENT.md`,
+`docs/BUILD.md` e `docs/RELEASE.md` para o detalhamento de cada área, e
+`CHANGELOG.md` para o histórico por estágio.
 
 ## Arquitetura
 
@@ -271,8 +291,10 @@ npm run tauri build    # build completo do aplicativo desktop (requer Rust)
 `npm run tauri build` gera o instalador nativo (`.app`/`.dmg` no macOS,
 `.exe`/`.msi` no Windows) com o frontend compilado embutido. **O
 empacotamento do sidecar Python como binário autocontido (PyInstaller +
-`externalBin` no `tauri.conf.json`) ainda não foi implementado neste
-estágio** — ver "Limitações conhecidas" abaixo.
+`externalBin` no `tauri.conf.json`) está documentado passo a passo em
+`docs/BUILD.md`, mas não foi executado neste ambiente** — sem os
+certificados de assinatura e o toolchain Rust necessários, ver "Estado
+atual e limitações conhecidas" abaixo.
 
 ## Estrutura do repositório
 
@@ -282,23 +304,24 @@ orquestrador/
 │   ├── src/                 # React (components, pages, layouts, hooks, stores, services, types)
 │   └── src-tauri/           # Rust: bridge com o sidecar Python, comandos Tauri, config
 ├── core/                    # Core Python do orquestrador
-│   ├── orchestrator/        # Intent Analyzer, Planner, Router, Executor, Verifier, Aggregator
-│   ├── agents/               # Modelo de agente + registry (mockado)
-│   ├── providers/            # ProviderAdapter (contrato) + MockProvider
-│   ├── tasks/                 # Lifecycle de tasks (state machine)
-│   ├── projects/              # Projetos locais
-│   ├── memory/                 # Contrato de memória + implementação SQLite
-│   ├── database/               # Conexão, migrations versionadas, repositories
-│   ├── tools/                   # Filesystem/Git/Terminal tools (sandboxed)
-│   ├── security/                 # Allowlist do bridge, SecretStore, audit log
-│   ├── bridge/                    # Protocolo, servidor, handlers, entrypoint do sidecar
-│   └── utils/                      # Plataforma, logging, erros, shell runner
+│   ├── orchestrator/        # Intent Analyzer, Planner, Router, Executor, Verifier, Aggregator, engine, recovery
+│   ├── agents/              # Modelo de agente, registry (6 especialistas reais + agentes mockados), Prompt Registry
+│   ├── providers/           # ProviderAdapter (contrato), adapters reais (Claude/Gemini/OpenAI) + MockProvider
+│   ├── learning/            # Reflection Engine, Learning Engine, playbooks, model performance, safety validator
+│   ├── tasks/               # Lifecycle de tasks (state machine)
+│   ├── projects/            # Projetos locais
+│   ├── memory/              # Contrato de memória + implementação SQLite
+│   ├── database/            # Conexão, migrations versionadas, repositories, backup/restauração
+│   ├── tools/               # Filesystem/Git/Terminal tools (sandboxed, endurecidas no Estágio 4)
+│   ├── security/            # Permission Engine, allowlist do bridge, SecretStore, secret scanner, audit log
+│   ├── bridge/              # Protocolo, servidor, handlers, entrypoint do sidecar
+│   └── utils/               # Plataforma, logging, erros, shell runner
 ├── tests/
-│   ├── python/                # Testes unitários do core
-│   ├── integration/           # Pipeline completo contra SQLite real
-│   └── smoke/                 # Sidecar real, protocolo real, fim a fim
-├── scripts/                   # setup/dev/test para macOS e Windows
-├── docs/                      # Decisões arquiteturais detalhadas
+│   ├── python/              # Testes unitários do core
+│   ├── integration/         # Pipeline completo contra SQLite real
+│   └── smoke/               # Sidecar real, protocolo real, fim a fim
+├── scripts/                 # setup/dev/test para macOS e Windows
+├── docs/                    # Arquitetura, segurança, desenvolvimento, build, release, decisões
 └── README.md
 ```
 
@@ -327,60 +350,47 @@ das que mais afetam os próximos estágios:
    estado não-terminal ao iniciar o app é marcada `failed` de forma
    determinística — nunca fica presa nem "continua" silenciosamente.
 
-## Limitações conhecidas
+## Estado atual e limitações conhecidas
 
-Estas limitações são reais e deliberadas para o escopo do Estágio 1 — não
-foram escondidas:
+O aplicativo está **beta-ready**: os fluxos principais (planejar, rotear,
+executar com providers reais, verificar deterministicamente, refletir,
+aprender, recuperar de um crash, fazer backup/restaurar o banco) funcionam
+de ponta a ponta e têm cobertura de teste real. Não é ainda
+**production-ready** no sentido de "pronto para distribuição pública sem
+ressalvas", pelos motivos abaixo — nenhum foi escondido:
 
-1. **Empacotamento de produção do sidecar Python não implementado.** Em
-   desenvolvimento, o Tauri inicia o Python do `.venv` do próprio
-   repositório. Para uma build distribuível onde o usuário final não tem
-   Python instalado, o plano (documentado em
-   `desktop/src-tauri/src/bridge/process.rs`) é congelar `core/` com
-   PyInstaller em um binário único e registrá-lo como `externalBin` no
-   `tauri.conf.json`. Isso é trabalho de empacotamento do Estágio 2+, não
-   afeta a arquitetura, e o `tauri.conf.json` já tem o campo `externalBin`
-   reservado para isso.
-2. **Fluxo de clique-a-clique na janela nativa não foi automatizado.** Não há
-   ferramenta de automação de UI nativa disponível neste ambiente de
-   desenvolvimento. Em vez disso, o fluxo completo foi validado de duas
-   formas complementares: (a) rodando o app real (`tauri dev`) e confirmando
-   nos logs que o handshake Rust↔Python e a conexão acontecem de verdade; e
-   (b) o smoke test em `tests/smoke/test_end_to_end_sidecar.py`, que fala o
-   protocolo real com o processo Python real (o mesmo que o Tauri spawna) e
-   cobre o fluxo completo ponta a ponta, incluindo fechar/reabrir o banco.
-   A lógica de frontend (estados, formulários, quadro de progresso) tem
-   cobertura unitária própria (Vitest) mockando apenas a fronteira do Tauri.
-3. **Modos Manual, Pipeline, Debate e Consenso são placeholders** na
-   interface (aparecem desabilitados com indicação de "próximo estágio") —
-   apenas o modo Automático está funcional, como pedido para este estágio.
-4. **Repositories de `provider_configs`, `prompt_versions` e `learned_rules`**
-   ainda não foram implementados (as tabelas existem via migration, prontas
-   para uso) porque nada no Estágio 1 os exercita; serão adicionados quando o
-   Estágio 2 precisar deles.
-5. **Migrations SQL não são 100% atômicas por statement** dentro de um mesmo
-   arquivo — `executescript` do SQLite aplica DDL de forma efetivamente
-   transacional na prática, mas não há um `BEGIN`/`COMMIT` explícito por
-   arquivo de migration. Suficiente para o schema atual (só DDL), mas vale
-   revisar se migrations futuras misturarem DDL com DML sensível.
+1. **Empacotamento distribuível (PyInstaller/Nuitka + Tauri bundle) foi
+   projetado e documentado (`docs/BUILD.md`), mas nenhum artefato assinado
+   ou notarizado foi de fato gerado neste ambiente** — ele não tem certificado
+   de assinatura Apple/Windows nem o toolchain Rust (`cargo`) instalado.
+   Marcado explicitamente como `UNVERIFIED EXTERNAL DEPENDENCY` em
+   `docs/BUILD.md`/`docs/RELEASE.md`.
+2. **O pipeline de CI (`.github/workflows/ci.yml`) está configurado mas nunca
+   foi executado** — este ambiente não tem um runner do GitHub Actions. A
+   sintaxe do YAML foi validada estaticamente; a primeira execução real
+   acontecerá no primeiro push/PR depois que o workflow for mesclado.
+3. **A janela de confirmação interativa para operações de alto risco não
+   existe na UI.** O backend já recusa (`require_confirmation`) qualquer
+   operação de alto risco/crítica (excluir arquivo, git push, reset --hard,
+   ...) que não tenha sido pré-autorizada explicitamente via
+   `Task.input["confirmed_operations"]` — o mecanismo está pronto e testado
+   (`core/security/permissions.py`), mas nenhum diálogo visual pede essa
+   confirmação ainda; hoje a única forma de autorizar é programática.
+4. **Um `ChangeSet` formal** (antes/depois por task, com hashes) não foi
+   implementado como estrutura própria — quando o workspace é um
+   repositório git, `git status`/`git diff` já cobrem esse papel na prática
+   (e `GitTool` agora suporta commits/branches/revert com o mesmo Permission
+   Engine); um workspace sem git não tem hoje um rastro de mudanças
+   estruturado independente do próprio sistema de arquivos.
+5. **Consolidação automática de regras aprendidas *já ativas*** não existe
+   (só candidatos passam por deduplicação antes de promover) — uma decisão
+   deliberada de segurança (ver `docs/SECURITY.md`), não um bug.
 
-## Preparação para o Estágio 2
+## Documentação relacionada
 
-A arquitetura já está pronta para receber, sem redesenho:
-
-- **Claude / Gemini / Codex-OpenAI**: basta implementar `ProviderAdapter`
-  (`core/providers/base.py`) para cada um e registrá-los — nada no
-  `Executor`, `Router` ou `ExecutionEngine` conhece o `MockProvider`
-  especificamente.
-- **Router e Planner orientados por IA**: `IntentAnalyzer`, `Planner` e
-  `Router` já são classes isoladas com uma interface estreita; trocar a
-  implementação baseada em regras por uma baseada em LLM não exige mudar o
-  `ExecutionEngine`.
-- **Agentes especializados**: `core/agents/models.py` já modela
-  capabilities, tools, permissions e config por agente; falta apenas
-  popular `AgentRegistry` a partir do banco em vez de uma lista fixa.
-- **Controle de custo**: `provider_configs` e o próprio `ProviderResult`
-  (`tokens_used`) já carregam os campos necessários para agregação de custo.
-- **Execução multi-modelo**: o `ExecutionPlan` já suporta múltiplos
-  `PlanStep`, cada um roteado independentemente — o Estágio 1 só usa um passo
-  por simplicidade, não por limitação da estrutura.
+- `docs/ARCHITECTURE.md` — componentes, camadas e como eles se conectam.
+- `docs/SECURITY.md` — modelo de confiança, sandbox, permissões, segredos.
+- `docs/DEVELOPMENT.md` — como rodar, testar e navegar o código no dia a dia.
+- `docs/BUILD.md` — empacotamento macOS/Windows, sidecar Python, assinatura.
+- `docs/RELEASE.md` — processo de release passo a passo.
+- `CHANGELOG.md` — o que mudou em cada estágio.

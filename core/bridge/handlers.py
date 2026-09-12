@@ -10,9 +10,11 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import asdict
+from pathlib import Path
 from typing import Any
 
 from core.bridge.context import BridgeContext
+from core.database.backup import create_backup, list_backups, restore_backup
 from core.learning.prompt_optimizer import PromptProposal
 from core.orchestrator.budget import BudgetLimits
 from core.projects.models import ProjectCreate, ProjectUpdate
@@ -734,6 +736,61 @@ async def _context_optimizer_suggestions(params: dict[str, Any], ctx: BridgeCont
         }
         for s in suggestions
     ]
+
+
+# --- database backup / integrity ---------------------------------------------
+
+
+@handler(BridgeCommand.DATABASE_BACKUP_CREATE)
+async def _database_backup_create(_params: dict[str, Any], ctx: BridgeContext) -> dict[str, Any]:
+    info = await create_backup(ctx.db.db_path)
+    await ctx.audit_logger.log("database.backup.create", "database", str(info.path), {})
+    return {"path": str(info.path), "created_at": info.created_at, "size_bytes": info.size_bytes}
+
+
+@handler(BridgeCommand.DATABASE_BACKUP_LIST)
+async def _database_backup_list(_params: dict[str, Any], ctx: BridgeContext) -> list[dict[str, Any]]:
+    return [
+        {"path": str(info.path), "created_at": info.created_at, "size_bytes": info.size_bytes}
+        for info in list_backups(ctx.db.db_path)
+    ]
+
+
+@handler(BridgeCommand.DATABASE_BACKUP_RESTORE)
+async def _database_backup_restore(params: dict[str, Any], ctx: BridgeContext) -> dict[str, Any]:
+    if not params.get("confirm"):
+        raise ValidationError("Restore requires 'confirm': true.")
+    backup_path = Path(_require_str(params, "path"))
+    db_path = ctx.db.db_path
+
+    await ctx.db.close()
+    try:
+        await restore_backup(backup_path, db_path)
+    finally:
+        await ctx.db.connect()
+
+    # Repositories transparently pick up the new connection (they read
+    # `Database.connection` per call, never cache it) -- but the Budget
+    # Manager's limits were cached in memory at startup, so refresh them
+    # explicitly. Other in-memory state seeded once at startup (the model
+    # registry, provider health) is not refreshed by a restore; a full app
+    # restart is recommended for full consistency -- see `core.database
+    # .backup`'s module docstring.
+    limits = await ctx.budgets_repo.get_global_limits()
+    ctx.budget.update_limits(limits)
+
+    await ctx.audit_logger.log("database.backup.restore", "database", str(backup_path), {})
+    return {"restored_from": str(backup_path), "restart_recommended": True}
+
+
+@handler(BridgeCommand.DATABASE_INTEGRITY_CHECK)
+async def _database_integrity_check(params: dict[str, Any], ctx: BridgeContext) -> dict[str, Any]:
+    full = bool(params.get("full", False))
+    if full:
+        issues = await ctx.db.full_integrity_check()
+        return {"ok": issues == ["ok"], "issues": issues}
+    ok = await ctx.db.quick_integrity_check()
+    return {"ok": ok, "issues": [] if ok else ["quick_check failed"]}
 
 
 # --- helpers -----------------------------------------------------------------

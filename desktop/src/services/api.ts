@@ -188,3 +188,20 @@ export const memoryApi = {
   history: (project_id: string, key: string) =>
     invokeBridge<MemoryRecordItem[]>("memory.history", { project_id, key }),
 };
+
+export interface DatabaseBackupInfo {
+  path: string;
+  created_at: string;
+  size_bytes: number;
+}
+
+export const databaseApi = {
+  createBackup: () => invokeBridge<DatabaseBackupInfo>("database.backup.create"),
+  listBackups: () => invokeBridge<DatabaseBackupInfo[]>("database.backup.list"),
+  restoreBackup: (path: string) =>
+    invokeBridge<{ restored_from: string; restart_recommended: boolean }>("database.backup.restore", {
+      path, confirm: true,
+    }),
+  integrityCheck: (full = false) =>
+    invokeBridge<{ ok: boolean; issues: string[] }>("database.integrity_check", { full }),
+};

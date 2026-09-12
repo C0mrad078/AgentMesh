@@ -48,6 +48,30 @@ def test_resolves_cargo_for_rust_project(tmp_path: Path) -> None:
     assert planner.resolve(ProjectAction.RUN_BUILD) == ["cargo", "build"]
 
 
+def test_resolves_mypy_typecheck_only_when_configured(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text("[tool.mypy]\nstrict = true\n", encoding="utf-8")
+    planner = CommandPlanner(tmp_path)
+    assert planner.resolve(ProjectAction.RUN_TYPECHECK) == [sys.executable, "-m", "mypy", "."]
+
+
+def test_no_mypy_config_means_no_typecheck_command(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='x'\n", encoding="utf-8")
+    planner = CommandPlanner(tmp_path)
+    assert planner.resolve(ProjectAction.RUN_TYPECHECK) is None
+
+
+def test_resolves_npm_install_for_node_project_without_needing_a_script(tmp_path: Path) -> None:
+    (tmp_path / "package.json").write_text(json.dumps({"scripts": {}}), encoding="utf-8")
+    planner = CommandPlanner(tmp_path)
+    assert planner.resolve(ProjectAction.INSTALL_DEPENDENCIES) == ["npm", "install"]
+
+
+def test_resolves_pip_install_for_python_project(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='x'\n", encoding="utf-8")
+    planner = CommandPlanner(tmp_path)
+    assert planner.resolve(ProjectAction.INSTALL_DEPENDENCIES) == [sys.executable, "-m", "pip", "install", "-e", "."]
+
+
 def test_unknown_stack_resolves_to_none(tmp_path: Path) -> None:
     planner = CommandPlanner(tmp_path)
     assert planner.resolve(ProjectAction.RUN_TESTS) is None

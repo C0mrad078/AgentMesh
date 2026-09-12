@@ -1,4 +1,5 @@
 import { AppShell } from "@/layouts/AppShell";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { WorkspacePage } from "@/pages/WorkspacePage";
 import { ExecutionsPage } from "@/pages/ExecutionsPage";
 import { AgentsPage } from "@/pages/AgentsPage";
@@ -15,6 +16,14 @@ const PAGES = {
   learning: LearningPage,
 };
 
+const PAGE_LABELS: Record<keyof typeof PAGES, string> = {
+  workspace: "Tarefas",
+  executions: "Execuções",
+  agents: "Agentes",
+  settings: "Configurações",
+  learning: "Aprendizado",
+};
+
 export default function App() {
   useBridgeSubscription();
   const activePage = useUiStore((s) => s.activePage);
@@ -22,7 +31,9 @@ export default function App() {
 
   return (
     <AppShell>
-      <Page />
+      <ErrorBoundary key={activePage} boundaryName={PAGE_LABELS[activePage]}>
+        <Page />
+      </ErrorBoundary>
     </AppShell>
   );
 }

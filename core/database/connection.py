@@ -42,9 +42,32 @@ class Database:
         await self._conn.execute("PRAGMA foreign_keys = ON")
         await self._conn.execute("PRAGMA journal_mode = WAL")
         await self._conn.execute("PRAGMA synchronous = NORMAL")
+        # A second process (or a backup/integrity-check reader) briefly
+        # holding a lock should not fail immediately -- wait up to 5s
+        # before raising "database is locked", matching real desktop usage
+        # (a backup can run while the app is live).
+        await self._conn.execute("PRAGMA busy_timeout = 5000")
         applied = await run_migrations(self._conn)
         if applied:
             logger.info("migrations_applied", extra={"context": {"versions": applied}})
+
+    async def quick_integrity_check(self) -> bool:
+        """`PRAGMA quick_check` -- cheap enough to run on every startup
+        (unlike the full `integrity_check`, which scans every index and is
+        reserved for an explicit, user-triggered diagnostic)."""
+        try:
+            row = await self.fetch_one("PRAGMA quick_check")
+        except DatabaseError:
+            return False
+        return row is not None and row[0] == "ok"
+
+    async def full_integrity_check(self) -> list[str]:
+        """`PRAGMA integrity_check` -- expensive on a large database;
+        callers should only run this on explicit user request (see
+        `database.integrity_check` bridge command), not automatically on
+        every startup."""
+        rows = await self.fetch_all("PRAGMA integrity_check")
+        return [row[0] for row in rows]
 
     async def close(self) -> None:
         if self._conn is not None:

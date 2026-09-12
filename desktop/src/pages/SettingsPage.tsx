@@ -2,6 +2,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { ProvidersSettings } from "@/components/ProvidersSettings";
 import { BudgetSettings } from "@/components/BudgetSettings";
+import { DataManagementSettings } from "@/components/DataManagementSettings";
+import packageJson from "../../package.json";
 
 const PLACEHOLDER_SECTIONS = [
   {
@@ -20,13 +22,7 @@ const PLACEHOLDER_SECTIONS = [
     value: "security",
     label: "Segurança",
     description: "Segredos, permissões e allowlist do bridge.",
-    body: "Chaves de API são armazenadas no Keychain (macOS) ou Credential Manager (Windows) via o SecretStore do core, nunca em texto puro, nunca em log e nunca reenviadas ao frontend depois de salvas. Toda operação de arquivo/git/terminal passa por uma allowlist tipada — nenhum agente executa comandos livres.",
-  },
-  {
-    value: "learning",
-    label: "Aprendizado",
-    description: "Como o Orquestrador aprende com execuções passadas.",
-    body: "O sistema de aprendizado (Reflection Engine, regras aprendidas, evolução de prompts) será implementado em um estágio futuro. Os dados necessários (custos, tempos, taxa de sucesso, decisões de roteamento) já estão sendo capturados desde agora.",
+    body: "Chaves de API são armazenadas no Keychain (macOS) ou Credential Manager (Windows) via o SecretStore do core, nunca em texto puro, nunca em log e nunca reenviadas ao frontend depois de salvas. Toda operação de arquivo/git/terminal passa por um Permission Engine com risco (baixo/médio/alto/crítico): ações de alto risco (excluir arquivo, git push, reset --hard) exigem confirmação explícita e nenhum agente executa comandos de shell livres.",
   },
 ];
 
@@ -40,7 +36,8 @@ export function SettingsPage() {
           <TabsTrigger value="providers">Providers</TabsTrigger>
           <TabsTrigger value="security">Segurança</TabsTrigger>
           <TabsTrigger value="executions">Execuções</TabsTrigger>
-          <TabsTrigger value="learning">Aprendizado</TabsTrigger>
+          <TabsTrigger value="data">Dados</TabsTrigger>
+          <TabsTrigger value="about">Sobre</TabsTrigger>
         </TabsList>
 
         <TabsContent value="providers">
@@ -89,6 +86,39 @@ export function SettingsPage() {
             </Card>
           </TabsContent>
         ))}
+
+        <TabsContent value="data">
+          <Card>
+            <CardHeader>
+              <CardTitle>Dados</CardTitle>
+              <CardDescription>
+                Backup, restauração e exportação dos dados locais do Orquestrador (banco de dados,
+                configurações, playbooks, prompts, regras aprendidas e memória de projeto).
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <DataManagementSettings />
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="about">
+          <Card>
+            <CardHeader>
+              <CardTitle>Sobre o Orquestrador</CardTitle>
+              <CardDescription>Aplicativo desktop local-first para orquestração de múltiplas IAs.</CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-1 text-sm text-muted-foreground">
+              <p>Versão: {packageJson.version}</p>
+              <p>Plataforma: {navigator.platform || "desconhecida"}</p>
+              <p className="mt-2 text-xs">
+                Dados locais permanecem no seu computador. Apenas o texto explicitamente enviado a
+                um provider de IA configurado (Claude, Gemini ou OpenAI) sai da máquina -- nunca
+                chaves de API, nunca arquivos não relacionados à tarefa em execução.
+              </p>
+            </CardContent>
+          </Card>
+        </TabsContent>
       </Tabs>
     </div>
   );

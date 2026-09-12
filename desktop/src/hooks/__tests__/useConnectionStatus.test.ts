@@ -23,6 +23,11 @@ describe("describeConnectionStatus", () => {
     expect(result).toMatchObject({ tone: "destructive", canRetry: true, isConnected: false });
   });
 
+  it("maps 'unavailable' to a retryable destructive state", () => {
+    const result = describeConnectionStatus({ status: "unavailable" });
+    expect(result).toMatchObject({ tone: "destructive", canRetry: true, isConnected: false });
+  });
+
   it("maps 'error' to a retryable destructive state with the message", () => {
     const result = describeConnectionStatus({ status: "error", message: "boom" });
     expect(result.tone).toBe("destructive");

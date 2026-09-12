@@ -26,10 +26,10 @@
 //!     connected/initializing/reconnecting/offline indicator is always
 //!     accurate.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::process::Stdio;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -47,6 +47,14 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// retrying in the background regardless, at a fixed slower cadence.
 const FAST_RETRY_ATTEMPTS: u32 = 5;
 const MAX_BACKOFF: Duration = Duration::from_secs(10);
+/// "max 3 restarts within 5 minutes, then core unavailable" -- after this
+/// many restart attempts inside `RESTART_WINDOW`, the supervisor stops
+/// retrying on its own and waits for an explicit `reconnect_now()` call
+/// instead of looping forever. A restart that stays up long enough to
+/// reach `stream_until_disconnected` clears the window, so a sidecar that
+/// merely restarts occasionally (not in a tight crash loop) is unaffected.
+const MAX_RESTARTS_PER_WINDOW: usize = 3;
+const RESTART_WINDOW: Duration = Duration::from_secs(300);
 const STATUS_EVENT: &str = "orchestrator://status";
 const MESSAGE_EVENT: &str = "orchestrator://event";
 
@@ -57,6 +65,12 @@ pub enum BridgeStatus {
     Connected,
     Reconnecting { attempt: u32 },
     Offline,
+    /// The sidecar crash-looped `MAX_RESTARTS_PER_WINDOW` times within
+    /// `RESTART_WINDOW`. Distinct from `Offline` (which still implies "the
+    /// supervisor is quietly retrying in the background"): this state
+    /// means automatic retries have stopped and the user must explicitly
+    /// ask to try again (see `reconnect_now`).
+    Unavailable,
     Error { message: String },
 }
 
@@ -97,6 +111,7 @@ pub struct BridgeManager {
     inner: Mutex<Inner>,
     status: Mutex<BridgeStatus>,
     reconnect_notify: Notify,
+    restart_history: Mutex<VecDeque<Instant>>,
 }
 
 impl BridgeManager {
@@ -107,6 +122,7 @@ impl BridgeManager {
             inner: Mutex::new(Inner::empty()),
             status: Mutex::new(BridgeStatus::Initializing),
             reconnect_notify: Notify::new(),
+            restart_history: Mutex::new(VecDeque::new()),
         })
     }
 
@@ -128,6 +144,7 @@ impl BridgeManager {
             match self.connect_once().await {
                 Ok(stdout) => {
                     attempt = 0;
+                    self.restart_history.lock().await.clear();
                     self.stream_until_disconnected(stdout).await;
                 }
                 Err(e) => {
@@ -136,6 +153,15 @@ impl BridgeManager {
             }
 
             attempt += 1;
+
+            if self.record_restart_and_check_crash_loop().await {
+                self.set_status(BridgeStatus::Unavailable).await;
+                self.reconnect_notify.notified().await;
+                self.restart_history.lock().await.clear();
+                attempt = 0;
+                continue;
+            }
+
             let status = if attempt <= FAST_RETRY_ATTEMPTS {
                 BridgeStatus::Reconnecting { attempt }
             } else {
@@ -150,6 +176,22 @@ impl BridgeManager {
                 }
             }
         }
+    }
+
+    /// Records one restart attempt and reports whether the sidecar has now
+    /// crash-looped `MAX_RESTARTS_PER_WINDOW` times within `RESTART_WINDOW`.
+    async fn record_restart_and_check_crash_loop(&self) -> bool {
+        let mut history = self.restart_history.lock().await;
+        let now = Instant::now();
+        while let Some(&front) = history.front() {
+            if now.duration_since(front) > RESTART_WINDOW {
+                history.pop_front();
+            } else {
+                break;
+            }
+        }
+        history.push_back(now);
+        history.len() > MAX_RESTARTS_PER_WINDOW
     }
 
     /// User-triggered retry (e.g. an "offline" banner's button). A no-op if

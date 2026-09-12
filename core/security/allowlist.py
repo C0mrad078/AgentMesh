@@ -94,5 +94,10 @@ class BridgeCommand(str, Enum):
 
     CONTEXT_OPTIMIZER_SUGGESTIONS = "context_optimizer.suggestions"
 
+    DATABASE_BACKUP_CREATE = "database.backup.create"
+    DATABASE_BACKUP_LIST = "database.backup.list"
+    DATABASE_BACKUP_RESTORE = "database.backup.restore"
+    DATABASE_INTEGRITY_CHECK = "database.integrity_check"
+
 
 ALL_COMMANDS: frozenset[str] = frozenset(member.value for member in BridgeCommand)

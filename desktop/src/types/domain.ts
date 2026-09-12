@@ -23,6 +23,7 @@ export type TaskStatus =
   | "waiting"
   | "reviewing"
   | "completed"
+  | "partial"
   | "failed"
   | "cancelled";
 
@@ -110,8 +111,111 @@ export interface Agent {
 
 export const TASK_MODES: { value: TaskMode; label: string; available: boolean }[] = [
   { value: "automatic", label: "Automático", available: true },
-  { value: "manual", label: "Manual", available: false },
-  { value: "pipeline", label: "Pipeline", available: false },
-  { value: "debate", label: "Debate", available: false },
-  { value: "consensus", label: "Consenso", available: false },
+  { value: "manual", label: "Manual", available: true },
+  { value: "pipeline", label: "Pipeline", available: true },
+  { value: "debate", label: "Debate", available: true },
+  { value: "consensus", label: "Consenso", available: true },
 ];
+
+// --- Stage 2: providers, models, cost/usage, routing, tools ----------------
+
+export type ProviderName = "anthropic" | "gemini" | "openai";
+
+export type ProviderHealthStatus = "online" | "degraded" | "rate_limited" | "unavailable" | "unknown";
+
+export type ConnectionTestResult =
+  | "connected"
+  | "invalid_key"
+  | "timeout"
+  | "rate_limited"
+  | "provider_unavailable"
+  | "unknown_error";
+
+export interface ProviderInfo {
+  provider: ProviderName;
+  display_name: string;
+  enabled: boolean;
+  connected: boolean;
+  health: ProviderHealthStatus;
+}
+
+export interface ModelInfo {
+  provider: string;
+  model_id: string;
+  display_name: string;
+  capabilities: string[];
+  context_window: number;
+  supports_tools: boolean;
+  supports_images: boolean;
+  supports_files: boolean;
+  supports_structured_output: boolean;
+  input_cost_per_million_usd: number;
+  output_cost_per_million_usd: number;
+  priority: number;
+  enabled: boolean;
+}
+
+export interface BudgetLimits {
+  max_per_execution_usd: number | null;
+  daily_limit_usd: number | null;
+  monthly_limit_usd: number | null;
+  soft_limit_ratio: number;
+}
+
+export interface UsageEntry {
+  id: string;
+  execution_id: string;
+  step_id: string | null;
+  agent_id: string | null;
+  provider: string;
+  model: string;
+  input_tokens: number;
+  output_tokens: number;
+  estimated_cost_usd: number;
+  duration_seconds: number;
+  success: boolean;
+  retries: number;
+  created_at: string;
+}
+
+export interface ExecutionUsageSummary {
+  entries: UsageEntry[];
+  total_cost_usd: number;
+  total_input_tokens: number;
+  total_output_tokens: number;
+}
+
+export interface RoutingDecisionRecord {
+  id: string;
+  execution_id: string;
+  step_id: string;
+  agent_id: string;
+  provider: string;
+  model: string;
+  score: number;
+  reason: string;
+  alternatives: string[];
+  created_at: string;
+}
+
+export interface ToolCallRecord {
+  id: string;
+  execution_id: string;
+  step_id: string | null;
+  agent_id: string | null;
+  tool_name: string;
+  arguments: Record<string, unknown>;
+  result: unknown;
+  error: string | null;
+  duration_seconds: number | null;
+  created_at: string;
+}
+
+export interface ExecutionEventRecord {
+  id: string;
+  execution_id: string;
+  task_id: string | null;
+  event_type: string;
+  payload: Record<string, unknown>;
+  created_at: string;
+}

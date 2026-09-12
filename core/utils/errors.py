@@ -25,6 +25,12 @@ class ErrorCode(str, Enum):
     PROVIDER_ERROR = "PROVIDER_ERROR"
     PROVIDER_TIMEOUT = "PROVIDER_TIMEOUT"
     PROVIDER_INVALID_RESPONSE = "PROVIDER_INVALID_RESPONSE"
+    PROVIDER_AUTHENTICATION_ERROR = "PROVIDER_AUTHENTICATION_ERROR"
+    PROVIDER_RATE_LIMIT_ERROR = "PROVIDER_RATE_LIMIT_ERROR"
+    PROVIDER_UNAVAILABLE_ERROR = "PROVIDER_UNAVAILABLE_ERROR"
+    TOOL_EXECUTION_ERROR = "TOOL_EXECUTION_ERROR"
+    VERIFICATION_ERROR = "VERIFICATION_ERROR"
+    BUDGET_EXCEEDED_ERROR = "BUDGET_EXCEEDED_ERROR"
     PATH_TRAVERSAL_DENIED = "PATH_TRAVERSAL_DENIED"
     TOOL_DENIED = "TOOL_DENIED"
     DATABASE_ERROR = "DATABASE_ERROR"
@@ -85,15 +91,76 @@ class CancelledErrorX(OrchestratorError):
 
 
 class ProviderError(OrchestratorError):
+    """Base for every error a `ProviderAdapter` can raise.
+
+    `retryable` drives the Executor's retry policy: only errors that are
+    plausibly transient (timeouts, rate limits, 5xx/unavailable) should ever
+    be retried automatically. Authentication errors, invalid responses, and
+    anything else that will deterministically fail again are not retryable
+    -- retrying them would just waste time/tokens and mask the real problem.
+    """
+
     code = ErrorCode.PROVIDER_ERROR
+    retryable: bool = False
 
 
 class ProviderTimeoutError(ProviderError):
     code = ErrorCode.PROVIDER_TIMEOUT
+    retryable = True
 
 
 class ProviderInvalidResponseError(ProviderError):
     code = ErrorCode.PROVIDER_INVALID_RESPONSE
+    retryable = False
+
+
+class ProviderAuthenticationError(ProviderError):
+    """Invalid/missing API key. Never retryable -- the same key will fail
+    again immediately; the user needs to fix the credential instead.
+    """
+
+    code = ErrorCode.PROVIDER_AUTHENTICATION_ERROR
+    retryable = False
+
+
+class ProviderRateLimitError(ProviderError):
+    code = ErrorCode.PROVIDER_RATE_LIMIT_ERROR
+    retryable = True
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        retry_after_seconds: float | None = None,
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(message, details=details)
+        self.retry_after_seconds = retry_after_seconds
+
+
+class ProviderUnavailableError(ProviderError):
+    """5xx / connection failure / provider-reported outage."""
+
+    code = ErrorCode.PROVIDER_UNAVAILABLE_ERROR
+    retryable = True
+
+
+class ToolExecutionError(OrchestratorError):
+    code = ErrorCode.TOOL_EXECUTION_ERROR
+
+
+class VerificationError(OrchestratorError):
+    """Raised when a verification step cannot even be attempted (e.g. a
+    malformed verification request) -- a normal verification *failure* is
+    represented by `VerificationResult(passed=False, ...)`, not an
+    exception; this is for the verifier itself being unable to run.
+    """
+
+    code = ErrorCode.VERIFICATION_ERROR
+
+
+class BudgetExceededError(OrchestratorError):
+    code = ErrorCode.BUDGET_EXCEEDED_ERROR
 
 
 class PathTraversalError(OrchestratorError):

@@ -33,6 +33,10 @@ class BridgeCommand(str, Enum):
     EXECUTION_LIST = "execution.list"
     EXECUTION_CANCEL = "execution.cancel"
     EXECUTION_STEPS_LIST = "execution.steps.list"
+    EXECUTION_EVENTS_LIST = "execution.events.list"
+    EXECUTION_ROUTING_LIST = "execution.routing.list"
+    EXECUTION_TOOL_CALLS_LIST = "execution.tool_calls.list"
+    EXECUTION_USAGE_LIST = "execution.usage.list"
 
     SETTINGS_GET = "settings.get"
     SETTINGS_UPDATE = "settings.update"
@@ -43,6 +47,17 @@ class BridgeCommand(str, Enum):
 
     GIT_STATUS = "git.status"
     GIT_DIFF = "git.diff"
+
+    PROVIDER_LIST = "provider.list"
+    PROVIDER_SET_CREDENTIAL = "provider.set_credential"
+    PROVIDER_REMOVE_CREDENTIAL = "provider.remove_credential"
+    PROVIDER_TEST_CONNECTION = "provider.test_connection"
+    PROVIDER_HEALTH = "provider.health"
+
+    MODEL_LIST = "model.list"
+
+    BUDGET_GET = "budget.get"
+    BUDGET_SET = "budget.set"
 
 
 ALL_COMMANDS: frozenset[str] = frozenset(member.value for member in BridgeCommand)

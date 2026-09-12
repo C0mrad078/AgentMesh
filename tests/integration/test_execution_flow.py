@@ -14,12 +14,13 @@ from pathlib import Path
 from core.bridge.context import build_context
 from core.orchestrator.models import ExecutionStatus, StepStatus
 from core.projects.models import ProjectCreate
-from core.providers.mock_provider import MockScenario
+from core.providers.mock_provider import MockProvider, MockScenario
+from core.security.secret_store import InMemorySecretStore
 from core.tasks.models import TaskCreate, TaskStatus
 
 
 async def test_full_pipeline_success(tmp_path: Path) -> None:
-    ctx = await build_context(tmp_path / "flow.db")
+    ctx = await build_context(tmp_path / "flow.db", provider_overrides={"mock": MockProvider()}, secret_store=InMemorySecretStore())
     try:
         project = await ctx.project_service.create_project(ProjectCreate(name="Flow Project"))
         task = await ctx.task_service.create_task(
@@ -43,12 +44,12 @@ async def test_full_pipeline_success(tmp_path: Path) -> None:
         assert len(phase_steps) == 6
         assert all(s.status == StepStatus.COMPLETED for s in phase_steps)
     finally:
-        await ctx.db.close()
+        await ctx.close()
 
 
 async def test_full_pipeline_persists_and_survives_reopen(tmp_path: Path) -> None:
     db_path = tmp_path / "persist.db"
-    ctx1 = await build_context(db_path)
+    ctx1 = await build_context(db_path, provider_overrides={"mock": MockProvider()}, secret_store=InMemorySecretStore())
     try:
         project = await ctx1.project_service.create_project(ProjectCreate(name="Reopen Project"))
         task = await ctx1.task_service.create_task(
@@ -58,9 +59,9 @@ async def test_full_pipeline_persists_and_survives_reopen(tmp_path: Path) -> Non
         execution_id = execution.id
         task_id = task.id
     finally:
-        await ctx1.db.close()
+        await ctx1.close()
 
-    ctx2 = await build_context(db_path)
+    ctx2 = await build_context(db_path, provider_overrides={"mock": MockProvider()}, secret_store=InMemorySecretStore())
     try:
         reloaded_task = await ctx2.task_service.get_task(task_id)
         assert reloaded_task.status == TaskStatus.COMPLETED
@@ -71,11 +72,11 @@ async def test_full_pipeline_persists_and_survives_reopen(tmp_path: Path) -> Non
         steps = await ctx2.steps_repo.list_for_execution(execution_id)
         assert len(steps) >= 6
     finally:
-        await ctx2.db.close()
+        await ctx2.close()
 
 
 async def test_full_pipeline_retry_scenario_recovers(tmp_path: Path) -> None:
-    ctx = await build_context(tmp_path / "retry.db")
+    ctx = await build_context(tmp_path / "retry.db", provider_overrides={"mock": MockProvider()}, secret_store=InMemorySecretStore())
     try:
         project = await ctx.project_service.create_project(ProjectCreate(name="Retry Project"))
         task = await ctx.task_service.create_task(
@@ -93,11 +94,11 @@ async def test_full_pipeline_retry_scenario_recovers(tmp_path: Path) -> None:
         assert len(work_steps) == 1
         assert work_steps[0].attempt == 2
     finally:
-        await ctx.db.close()
+        await ctx.close()
 
 
 async def test_full_pipeline_persistent_failure_marks_task_failed(tmp_path: Path) -> None:
-    ctx = await build_context(tmp_path / "fail.db")
+    ctx = await build_context(tmp_path / "fail.db", provider_overrides={"mock": MockProvider()}, secret_store=InMemorySecretStore())
     try:
         project = await ctx.project_service.create_project(ProjectCreate(name="Fail Project"))
         task = await ctx.task_service.create_task(
@@ -113,11 +114,11 @@ async def test_full_pipeline_persistent_failure_marks_task_failed(tmp_path: Path
         final_task = await ctx.task_service.get_task(task.id)
         assert final_task.status == TaskStatus.FAILED
     finally:
-        await ctx.db.close()
+        await ctx.close()
 
 
 async def test_full_pipeline_cancellation_stops_the_run(tmp_path: Path) -> None:
-    ctx = await build_context(tmp_path / "cancel.db")
+    ctx = await build_context(tmp_path / "cancel.db", provider_overrides={"mock": MockProvider()}, secret_store=InMemorySecretStore())
     try:
         project = await ctx.project_service.create_project(ProjectCreate(name="Cancel Project"))
         task = await ctx.task_service.create_task(
@@ -148,4 +149,4 @@ async def test_full_pipeline_cancellation_stops_the_run(tmp_path: Path) -> None:
         final_task = await ctx.task_service.get_task(task.id)
         assert final_task.status == TaskStatus.CANCELLED
     finally:
-        await ctx.db.close()
+        await ctx.close()

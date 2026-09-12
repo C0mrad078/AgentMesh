@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/EmptyState";
 import { ModeSelector } from "@/components/ModeSelector";
 import { StepBoard } from "@/components/StepBoard";
+import { AgentPicker } from "@/components/AgentPicker";
 import { useSelectedProject } from "@/stores/projectsStore";
 import { useUiStore } from "@/stores/uiStore";
 import { useExecutionStore } from "@/stores/executionStore";
@@ -18,17 +19,38 @@ const TASK_STATUS_LABEL: Record<string, string> = {
   waiting: "Aguardando",
   reviewing: "Em revisão",
   completed: "Concluída",
+  partial: "Parcial",
   failed: "Falhou",
   cancelled: "Cancelada",
 };
+
+function statusBadgeVariant(status: string): "success" | "warning" | "destructive" | "secondary" {
+  if (status === "completed") return "success";
+  if (status === "partial") return "warning";
+  if (status === "failed" || status === "cancelled") return "destructive";
+  return "secondary";
+}
+
+function buildProviderInput(mode: string, agentIds: string[]): Record<string, unknown> {
+  if (mode === "manual") {
+    return agentIds[0] ? { agent_id: agentIds[0] } : {};
+  }
+  if (mode === "pipeline" || mode === "debate" || mode === "consensus") {
+    return agentIds.length > 0 ? { agent_ids: agentIds } : {};
+  }
+  return {};
+}
 
 export function WorkspacePage() {
   const project = useSelectedProject();
   const setNewProjectDialogOpen = useUiStore((s) => s.setNewProjectDialogOpen);
   const selectedMode = useUiStore((s) => s.selectedMode);
+  const selectedAgentIds = useUiStore((s) => s.selectedAgentIds);
+  const setSelectedAgentIds = useUiStore((s) => s.setSelectedAgentIds);
   const { isConnected } = useConnectionStatus();
 
-  const { submitTask, cancelActive, submitting, phases, task, error } = useExecutionStore();
+  const { submitTask, cancelActive, submitting, phases, agentEntries, costUsd, task, error } =
+    useExecutionStore();
   const [title, setTitle] = useState("");
 
   if (!project) {
@@ -42,11 +64,18 @@ export function WorkspacePage() {
     );
   }
 
-  const isRunning = task ? !["completed", "failed", "cancelled"].includes(task.status) : false;
+  const isRunning = task
+    ? !["completed", "partial", "failed", "cancelled"].includes(task.status)
+    : false;
 
   async function handleSubmit() {
     if (!title.trim() || !project) return;
-    await submitTask({ projectId: project.id, title: title.trim(), mode: selectedMode });
+    await submitTask({
+      projectId: project.id,
+      title: title.trim(),
+      mode: selectedMode,
+      providerInput: buildProviderInput(selectedMode, selectedAgentIds),
+    });
     setTitle("");
   }
 
@@ -73,6 +102,9 @@ export function WorkspacePage() {
             onChange={(e) => setTitle(e.target.value)}
             disabled={submitting || isRunning}
           />
+          {selectedMode !== "automatic" && !isRunning && (
+            <AgentPicker mode={selectedMode} selected={selectedAgentIds} onChange={setSelectedAgentIds} />
+          )}
           <div className="flex justify-end gap-2">
             {isRunning ? (
               <Button variant="destructive" onClick={() => void cancelActive()}>
@@ -99,22 +131,31 @@ export function WorkspacePage() {
         <Card>
           <CardHeader className="flex-row items-center justify-between space-y-0">
             <CardTitle>Progresso</CardTitle>
-            {task && (
-              <Badge
-                variant={
-                  task.status === "completed"
-                    ? "success"
-                    : task.status === "failed" || task.status === "cancelled"
-                      ? "destructive"
-                      : "secondary"
-                }
-              >
-                {TASK_STATUS_LABEL[task.status]}
-              </Badge>
-            )}
+            <div className="flex items-center gap-2">
+              {costUsd !== null && (
+                <Badge variant="outline">${costUsd.toFixed(4)}</Badge>
+              )}
+              {task && (
+                <Badge variant={statusBadgeVariant(task.status)}>
+                  {TASK_STATUS_LABEL[task.status]}
+                </Badge>
+              )}
+            </div>
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
             <StepBoard phases={phases} />
+            {agentEntries.length > 0 && (
+              <div className="flex flex-col gap-1.5">
+                <p className="text-xs font-medium text-muted-foreground">Agentes</p>
+                <div className="flex flex-wrap gap-2">
+                  {agentEntries.map((entry) => (
+                    <Badge key={entry.agentId} variant={statusBadgeVariant(entry.status)}>
+                      {entry.agentName}: {TASK_STATUS_LABEL[entry.status] ?? entry.status}
+                    </Badge>
+                  ))}
+                </div>
+              </div>
+            )}
             {task?.result && (
               <div className="rounded-md bg-muted p-3 text-sm">
                 <p className="mb-1 text-xs font-medium text-muted-foreground">Resultado</p>

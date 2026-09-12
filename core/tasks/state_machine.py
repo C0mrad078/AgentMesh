@@ -14,14 +14,16 @@ from core.utils.errors import InvalidStateTransitionError
 _ALLOWED_TRANSITIONS: dict[TaskStatus, frozenset[TaskStatus]] = {
     TaskStatus.QUEUED: frozenset({TaskStatus.RUNNING, TaskStatus.CANCELLED}),
     TaskStatus.RUNNING: frozenset(
-        {TaskStatus.WAITING, TaskStatus.REVIEWING, TaskStatus.COMPLETED,
+        {TaskStatus.WAITING, TaskStatus.REVIEWING, TaskStatus.COMPLETED, TaskStatus.PARTIAL,
          TaskStatus.FAILED, TaskStatus.CANCELLED}
     ),
     TaskStatus.WAITING: frozenset({TaskStatus.RUNNING, TaskStatus.CANCELLED, TaskStatus.FAILED}),
     TaskStatus.REVIEWING: frozenset(
-        {TaskStatus.RUNNING, TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED}
+        {TaskStatus.RUNNING, TaskStatus.COMPLETED, TaskStatus.PARTIAL, TaskStatus.FAILED,
+         TaskStatus.CANCELLED}
     ),
     TaskStatus.COMPLETED: frozenset(),
+    TaskStatus.PARTIAL: frozenset(),
     TaskStatus.FAILED: frozenset(),
     TaskStatus.CANCELLED: frozenset(),
 }

@@ -15,12 +15,13 @@ class TaskStatus(str, Enum):
     WAITING = "waiting"
     REVIEWING = "reviewing"
     COMPLETED = "completed"
+    PARTIAL = "partial"
     FAILED = "failed"
     CANCELLED = "cancelled"
 
 
 TERMINAL_TASK_STATUSES = frozenset(
-    {TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED}
+    {TaskStatus.COMPLETED, TaskStatus.PARTIAL, TaskStatus.FAILED, TaskStatus.CANCELLED}
 )
 
 

@@ -25,6 +25,7 @@ from core.bridge.protocol import (
     ResponseMessage,
 )
 from core.bridge.transport import StdioTransport
+from core.orchestrator.event_bus import OrchestrationEvent
 from core.orchestrator.events import ExecutionEvent
 from core.utils.errors import UnauthorizedError
 from core.utils.logging import get_logger, log_event
@@ -50,6 +51,29 @@ def make_event_sink(transport: StdioTransport):
                 "phase_label": event.phase_label,
                 "status": event.status.value,
                 "detail": event.detail,
+            },
+        )
+        await transport.write_line(message.model_dump_json())
+
+    return sink
+
+
+def make_orchestration_event_sink(transport: StdioTransport):
+    """Forwards every fine-grained `OrchestrationEvent` (agent selected,
+    provider call started/completed, tool call, retry, verification, ...)
+    to the frontend as its own bridge event, named after the event type
+    (e.g. `agent.selected`). This is what backs the optional "Execution
+    Inspector" / debug view; the step-by-step progress board only needs
+    `execution.progress` (see `make_event_sink` above).
+    """
+
+    async def sink(event: OrchestrationEvent) -> None:
+        message = EventMessage(
+            event=event.type.value,
+            payload={
+                "execution_id": event.execution_id,
+                "task_id": event.task_id,
+                **event.payload,
             },
         )
         await transport.write_line(message.model_dump_json())

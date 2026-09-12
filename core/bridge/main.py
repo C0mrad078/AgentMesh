@@ -7,6 +7,11 @@ variables (set by the Tauri Rust side when spawning the sidecar):
     process that spawned this one. Required.
   * `ORCH_DATA_DIR`      -- optional override for the application data
     directory (used by dev/test to avoid touching the real user profile).
+  * `ORCH_ENABLE_MOCK_PROVIDER` -- test-only opt-in ("1"/"true"). Registers
+    `MockProvider` in the provider pool alongside whatever real providers
+    are configured, so the end-to-end smoke test can exercise the full
+    autonomous pipeline deterministically without real API keys. Never set
+    by the desktop app itself.
 
 Every log line goes to stderr and/or the rotating log file under the
 platform log directory -- never stdout, which is reserved entirely for the
@@ -22,9 +27,11 @@ import os
 import sys
 
 from core.bridge.context import build_context
-from core.bridge.server import BridgeServer, make_event_sink
+from core.bridge.server import BridgeServer, make_event_sink, make_orchestration_event_sink
 from core.bridge.transport import StdioTransport
 from core.orchestrator.recovery import recover_interrupted_work
+from core.providers.base import ProviderAdapter
+from core.providers.mock_provider import MockProvider
 from core.utils.logging import configure_logging, get_logger, guard_stdout
 from core.utils.platform import get_app_paths
 
@@ -43,7 +50,16 @@ async def _async_main() -> int:
 
     transport = StdioTransport()
     sink = make_event_sink(transport)
-    context = await build_context(paths.db_path, event_sink=sink)
+    orchestration_sink = make_orchestration_event_sink(transport)
+
+    provider_overrides: dict[str, ProviderAdapter] | None = None
+    if os.environ.get("ORCH_ENABLE_MOCK_PROVIDER", "").lower() in ("1", "true"):
+        provider_overrides = {"mock": MockProvider()}
+
+    context = await build_context(
+        paths.db_path, event_sink=sink, orchestration_event_sink=orchestration_sink,
+        provider_overrides=provider_overrides,
+    )
 
     report = await recover_interrupted_work(context.task_service, context.executions_repo)
     if report.recovered_task_ids or report.recovered_execution_ids:
@@ -62,7 +78,7 @@ async def _async_main() -> int:
         with guard_stdout():
             await server.serve_forever()
     finally:
-        await context.db.close()
+        await context.close()
     return 0
 
 

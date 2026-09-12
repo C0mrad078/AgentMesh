@@ -13,9 +13,10 @@ from pathlib import Path
 
 from core.tools.base import Tool
 from core.tools.path_guard import resolve_safe_path
-from core.utils.errors import NotFoundError
+from core.utils.errors import NotFoundError, ToolDeniedError
 
 _MAX_READ_BYTES = 5 * 1024 * 1024  # 5 MiB safety cap for a single read
+_MAX_WRITE_BYTES = 2 * 1024 * 1024  # 2 MiB safety cap for a single write
 
 
 @dataclass(frozen=True)
@@ -77,6 +78,19 @@ class FilesystemTool(Tool):
                 f"File '{relative_path}' exceeds the maximum readable size of {max_bytes} bytes."
             )
         return data.decode("utf-8", errors="replace")
+
+    def write_file(
+        self, relative_path: str, content: str, *, max_bytes: int = _MAX_WRITE_BYTES
+    ) -> None:
+        encoded = content.encode("utf-8")
+        if len(encoded) > max_bytes:
+            raise ToolDeniedError(
+                f"Refusing to write '{relative_path}': {len(encoded)} bytes exceeds the "
+                f"maximum of {max_bytes} bytes for a single write.",
+            )
+        target = resolve_safe_path(self.workspace_root, relative_path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(encoded)
 
     def exists(self, relative_path: str) -> bool:
         try:

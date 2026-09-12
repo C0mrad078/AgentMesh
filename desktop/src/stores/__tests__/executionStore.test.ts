@@ -9,6 +9,16 @@ vi.mock("@/services/api", () => ({
   executionsApi: {
     start: vi.fn(),
     cancel: vi.fn(),
+    steps: vi.fn().mockResolvedValue([]),
+    usage: vi.fn().mockResolvedValue({
+      entries: [],
+      total_cost_usd: 0,
+      total_input_tokens: 0,
+      total_output_tokens: 0,
+    }),
+  },
+  agentsApi: {
+    list: vi.fn().mockResolvedValue([]),
   },
 }));
 
@@ -21,6 +31,8 @@ describe("useExecutionStore", () => {
       activeTaskId: null,
       activeExecutionId: null,
       phases: [],
+      agentEntries: [],
+      costUsd: null,
       task: null,
       submitting: false,
       error: null,

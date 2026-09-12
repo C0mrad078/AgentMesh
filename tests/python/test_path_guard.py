@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from core.tools.filesystem_tool import FilesystemTool
 from core.tools.path_guard import resolve_safe_path
-from core.utils.errors import PathTraversalError
+from core.utils.errors import PathTraversalError, ToolDeniedError
 
 
 def test_valid_relative_path_resolves(tmp_path: Path) -> None:
@@ -63,3 +63,21 @@ def test_filesystem_tool_rejects_files_over_the_size_cap(tmp_path: Path) -> None
     tool = FilesystemTool(tmp_path)
     with pytest.raises(ValueError):
         tool.read_file("big.txt", max_bytes=10)
+
+
+def test_filesystem_tool_write_file_creates_parent_dirs(tmp_path: Path) -> None:
+    tool = FilesystemTool(tmp_path)
+    tool.write_file("nested/dir/new.txt", "hello world")
+    assert (tmp_path / "nested" / "dir" / "new.txt").read_text(encoding="utf-8") == "hello world"
+
+
+def test_filesystem_tool_write_file_rejects_path_traversal(tmp_path: Path) -> None:
+    tool = FilesystemTool(tmp_path)
+    with pytest.raises(PathTraversalError):
+        tool.write_file("../outside.txt", "malicious")
+
+
+def test_filesystem_tool_write_file_rejects_oversized_content(tmp_path: Path) -> None:
+    tool = FilesystemTool(tmp_path)
+    with pytest.raises(ToolDeniedError):
+        tool.write_file("big.txt", "x" * 100, max_bytes=10)

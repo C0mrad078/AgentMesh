@@ -13,6 +13,7 @@ import type { ExecutionProgressPayload } from "@/types";
 export function useBridgeSubscription(): void {
   const initConnection = useConnectionStore((s) => s.init);
   const handleProgressEvent = useExecutionStore((s) => s.handleProgressEvent);
+  const handleOrchestrationEvent = useExecutionStore((s) => s.handleOrchestrationEvent);
 
   useEffect(() => {
     void initConnection();
@@ -21,6 +22,8 @@ export function useBridgeSubscription(): void {
     void onBridgeEvent((event) => {
       if (event.event === "execution.progress") {
         handleProgressEvent(event.payload as ExecutionProgressPayload);
+      } else {
+        handleOrchestrationEvent(event.event, event.payload as { execution_id?: string });
       }
     }).then((fn) => {
       unlisten = fn;

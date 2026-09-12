@@ -10,6 +10,8 @@ interface UiState {
   setNewProjectDialogOpen: (open: boolean) => void;
   selectedMode: TaskMode;
   setSelectedMode: (mode: TaskMode) => void;
+  selectedAgentIds: string[];
+  setSelectedAgentIds: (ids: string[]) => void;
 }
 
 export const useUiStore = create<UiState>((set) => ({
@@ -18,5 +20,9 @@ export const useUiStore = create<UiState>((set) => ({
   newProjectDialogOpen: false,
   setNewProjectDialogOpen: (open) => set({ newProjectDialogOpen: open }),
   selectedMode: "automatic",
-  setSelectedMode: (mode) => set({ selectedMode: mode }),
+  // Changing mode invalidates whatever agent selection was made for the
+  // previous mode (a debate roster doesn't carry over to pipeline order).
+  setSelectedMode: (mode) => set({ selectedMode: mode, selectedAgentIds: [] }),
+  selectedAgentIds: [],
+  setSelectedAgentIds: (ids) => set({ selectedAgentIds: ids }),
 }));

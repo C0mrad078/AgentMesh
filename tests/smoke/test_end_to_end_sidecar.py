@@ -39,10 +39,12 @@ REQUEST_TIMEOUT_SECONDS = 10.0
 class SidecarClient:
     """Minimal JSON-lines client mirroring the Rust `BridgeManager`."""
 
-    def __init__(self, data_dir: Path) -> None:
+    def __init__(self, data_dir: Path, *, enable_mock_provider: bool = False) -> None:
         env = dict(os.environ)
         env["ORCH_SESSION_TOKEN"] = SESSION_TOKEN
         env["ORCH_DATA_DIR"] = str(data_dir)
+        if enable_mock_provider:
+            env["ORCH_ENABLE_MOCK_PROVIDER"] = "1"
         self.process = subprocess.Popen(
             [sys.executable, "-m", "core.bridge.main"],
             cwd=str(REPO_ROOT),
@@ -98,7 +100,13 @@ def data_dir(tmp_path: Path) -> Path:
 
 
 def test_full_smoke_flow_through_the_real_sidecar_process(data_dir: Path) -> None:
-    client = SidecarClient(data_dir)
+    """Exercises the full autonomous pipeline with `ORCH_ENABLE_MOCK_PROVIDER=1`
+    (see `core.bridge.main`) -- a deterministic, test-only opt-in that
+    registers `MockProvider` so this can run without real API keys. The
+    default, key-less behavior is covered separately by
+    `test_no_provider_configured_reports_a_clear_offline_message` below.
+    """
+    client = SidecarClient(data_dir, enable_mock_provider=True)
     try:
         # health.check
         health = client.call("health.check")
@@ -165,7 +173,7 @@ def test_full_smoke_flow_through_the_real_sidecar_process(data_dir: Path) -> Non
 
     # Fechar/reabrir historico: um processo totalmente novo, mesma pasta de
     # dados, deve continuar enxergando o mesmo resultado.
-    reopened = SidecarClient(data_dir)
+    reopened = SidecarClient(data_dir, enable_mock_provider=True)
     try:
         got = reopened.call("task.get", {"task_id": task["id"]})
         assert got["ok"] is True
@@ -176,6 +184,45 @@ def test_full_smoke_flow_through_the_real_sidecar_process(data_dir: Path) -> Non
         assert any(p["id"] == project["id"] for p in projects_after_reopen["result"])
     finally:
         reopened.close()
+
+
+def test_no_provider_configured_reports_a_clear_offline_message(data_dir: Path) -> None:
+    """Offline Mode: with no API key configured (the default -- this client
+    does *not* set `ORCH_ENABLE_MOCK_PROVIDER`), the app must still open,
+    create/list projects, and create tasks. Only actually *starting* an
+    execution should fail, and it must fail with a clear, actionable
+    message rather than a generic error or a crash.
+    """
+    client = SidecarClient(data_dir)
+    try:
+        project = client.call("project.create", {"name": "Offline Project"})["result"]
+        task = client.call(
+            "task.create", {"project_id": project["id"], "title": "Do something"}
+        )["result"]
+
+        start = client.call("execution.start", {"task_id": task["id"]})
+        assert start["ok"] is True  # fire-and-forget accepted; failure surfaces on the task
+
+        final_task = None
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            got = client.call("task.get", {"task_id": task["id"]})
+            if got["result"]["status"] in ("completed", "failed", "partial", "cancelled"):
+                final_task = got["result"]
+                break
+            time.sleep(0.1)
+
+        assert final_task is not None
+        assert final_task["status"] == "failed"
+        assert "provider" in final_task["result"]["error"].lower()
+
+        # The app itself, and every non-AI feature, must still work fine.
+        health = client.call("health.check")
+        assert health["ok"] is True
+        projects = client.call("project.list")
+        assert any(p["id"] == project["id"] for p in projects["result"])
+    finally:
+        client.close()
 
 
 def test_invalid_request_and_unknown_command_do_not_crash_the_sidecar(data_dir: Path) -> None:

@@ -8,11 +8,20 @@
 import { invokeBridge } from "@/services/bridge";
 import type {
   Agent,
+  BudgetLimits,
+  ConnectionTestResult,
   Execution,
+  ExecutionEventRecord,
   ExecutionStep,
+  ExecutionUsageSummary,
+  ModelInfo,
   Project,
+  ProviderInfo,
+  ProviderName,
+  RoutingDecisionRecord,
   Task,
   TaskMode,
+  ToolCallRecord,
 } from "@/types";
 
 export const projectsApi = {
@@ -58,6 +67,39 @@ export const executionsApi = {
     }),
   steps: (execution_id: string) =>
     invokeBridge<ExecutionStep[]>("execution.steps.list", { execution_id }),
+  events: (execution_id: string) =>
+    invokeBridge<ExecutionEventRecord[]>("execution.events.list", { execution_id }),
+  routing: (execution_id: string) =>
+    invokeBridge<RoutingDecisionRecord[]>("execution.routing.list", { execution_id }),
+  toolCalls: (execution_id: string) =>
+    invokeBridge<ToolCallRecord[]>("execution.tool_calls.list", { execution_id }),
+  usage: (execution_id: string) =>
+    invokeBridge<ExecutionUsageSummary>("execution.usage.list", { execution_id }),
+};
+
+export const providersApi = {
+  list: () => invokeBridge<ProviderInfo[]>("provider.list"),
+  health: () => invokeBridge<{ provider: string; status: string; last_error: string | null; consecutive_failures: number }[]>(
+    "provider.health",
+  ),
+  setCredential: (provider: ProviderName, api_key: string) =>
+    invokeBridge<{ provider: string; enabled: boolean }>("provider.set_credential", { provider, api_key }),
+  removeCredential: (provider: ProviderName) =>
+    invokeBridge<{ provider: string; enabled: boolean }>("provider.remove_credential", { provider }),
+  testConnection: (provider: ProviderName, api_key?: string) =>
+    invokeBridge<{ provider: string; result: ConnectionTestResult }>("provider.test_connection", {
+      provider,
+      ...(api_key ? { api_key } : {}),
+    }),
+};
+
+export const modelsApi = {
+  list: () => invokeBridge<ModelInfo[]>("model.list"),
+};
+
+export const budgetApi = {
+  get: () => invokeBridge<BudgetLimits>("budget.get"),
+  set: (limits: Partial<BudgetLimits>) => invokeBridge<BudgetLimits>("budget.set", limits),
 };
 
 export const settingsApi = {

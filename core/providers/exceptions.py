@@ -2,6 +2,20 @@
 
 from __future__ import annotations
 
-from core.utils.errors import ProviderError, ProviderInvalidResponseError, ProviderTimeoutError
+from core.utils.errors import (
+    ProviderAuthenticationError,
+    ProviderError,
+    ProviderInvalidResponseError,
+    ProviderRateLimitError,
+    ProviderTimeoutError,
+    ProviderUnavailableError,
+)
 
-__all__ = ["ProviderError", "ProviderInvalidResponseError", "ProviderTimeoutError"]
+__all__ = [
+    "ProviderAuthenticationError",
+    "ProviderError",
+    "ProviderInvalidResponseError",
+    "ProviderRateLimitError",
+    "ProviderTimeoutError",
+    "ProviderUnavailableError",
+]

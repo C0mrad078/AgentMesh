@@ -9,6 +9,7 @@ from core.bridge.context import build_context
 from core.bridge.handlers import dispatch
 from core.bridge.protocol import RequestMessage, parse_incoming
 from core.bridge.server import BridgeServer
+from core.security.secret_store import InMemorySecretStore
 from core.utils.errors import UnknownCommandError, ValidationError
 
 SESSION = "test-session-token"
@@ -30,7 +31,7 @@ class FakeTransport:
 
 @pytest.fixture
 async def ctx(tmp_path: Path):
-    context = await build_context(tmp_path / "bridge-test.db")
+    context = await build_context(tmp_path / "bridge-test.db", secret_store=InMemorySecretStore())
     try:
         yield context
     finally:

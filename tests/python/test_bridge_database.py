@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from core.bridge.context import build_context
 from core.bridge.handlers import dispatch
+from core.database.connection import Database
 from core.projects.models import ProjectCreate
 from core.security.secret_store import InMemorySecretStore
 
@@ -36,3 +38,11 @@ async def test_backup_create_list_restore_via_bridge(ctx) -> None:
 async def test_integrity_check_via_bridge(ctx) -> None:
     result = await dispatch("database.integrity_check", {}, ctx)
     assert result["ok"] is True
+
+async def test_build_context_runs_a_quick_integrity_check_at_startup(tmp_path: Path) -> None:
+    with patch.object(Database, "quick_integrity_check", new=AsyncMock(return_value=True)) as spy:
+        context = await build_context(tmp_path / "startup_check.db", secret_store=InMemorySecretStore())
+        try:
+            spy.assert_awaited_once()
+        finally:
+            await context.close()

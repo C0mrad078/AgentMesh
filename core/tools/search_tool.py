@@ -1,9 +1,12 @@
 """Text search over a project workspace.
 
-Prefers `ripgrep` (`rg`) when it is available on PATH -- it is fast and
-already respects `.gitignore` -- falling back to a pure-Python recursive
-scan (via `ProjectScanner`, which applies the same ignore rules) when it is
-not, so search works even on a machine without `rg` installed.
+Prefers `ripgrep` (`rg`) when it is available on PATH -- it is fast --
+falling back to a pure-Python recursive scan (via `ProjectScanner`) when it
+is not, so search works even on a machine without `rg` installed. Both
+paths are made to behave identically regardless of which one runs: the
+same `DEFAULT_IGNORE_PATTERNS` are excluded explicitly (never relying on a
+project having its own `.gitignore`), matching is case-insensitive in
+both, and returned paths are always relative without a leading `./`.
 """
 
 from __future__ import annotations
@@ -13,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from core.tools.path_guard import resolve_safe_path
-from core.tools.project_scanner import ProjectScanner
+from core.tools.project_scanner import DEFAULT_IGNORE_PATTERNS, ProjectScanner
 from core.utils.shell_runner import get_runner
 
 _MAX_RESULTS_DEFAULT = 50
@@ -41,7 +44,12 @@ class SearchTool:
         return self._search_fallback(query, max_results)
 
     async def _search_ripgrep(self, query: str, max_results: int) -> list[SearchMatch]:
-        argv = ["rg", "--line-number", "--no-heading", "--max-count", str(max_results), "--", query, "."]
+        argv = [
+            "rg", "--line-number", "--no-heading", "--ignore-case",
+            "--max-count", str(max_results),
+            *(f"--glob=!{pattern}" for pattern in DEFAULT_IGNORE_PATTERNS),
+            "--", query, ".",
+        ]
         result = await self._runner.run(argv, cwd=self.workspace_root, timeout=15.0)
         matches: list[SearchMatch] = []
         for line in result.stdout.splitlines():
@@ -49,6 +57,7 @@ class SearchTool:
             if len(parts) != 3:
                 continue
             path, line_no, text = parts
+            path = path.removeprefix("./")
             try:
                 matches.append(SearchMatch(path=path, line=int(line_no), text=text))
             except ValueError:

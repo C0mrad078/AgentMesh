@@ -43,6 +43,7 @@ from core.providers.exceptions import ProviderError, ProviderRateLimitError
 from core.providers.health import ProviderHealthMonitor
 from core.providers.pool import ProviderPool
 from core.providers.registry import ModelRegistry
+from core.security.secret_scanner import SecretScanner
 from core.tools.tool_schemas import ALL_TOOL_SCHEMAS, ToolExecutor
 from core.utils.errors import BudgetExceededError
 from core.utils.logging import get_logger, log_event
@@ -92,6 +93,7 @@ class StepExecutor:
         self._events = event_bus
         self._models = model_registry
         self._policy = policy or RetryPolicy()
+        self._secret_scanner = SecretScanner()
 
     async def run(
         self,
@@ -148,11 +150,13 @@ class StepExecutor:
                     call, tool_executor, step=step, agent=agent, execution_id=execution_id,
                 ))
                 tool_result = tool_call_log[-1]
+                raw_content = tool_result["error"] or _stringify(tool_result["output"])
+                redacted_content, _ = self._secret_scanner.redact(raw_content)
                 messages = [
                     *messages,
                     AIMessage(
                         role=MessageRole.TOOL,
-                        content=tool_result["error"] or _stringify(tool_result["output"]),
+                        content=redacted_content,
                         tool_call_id=call.id,
                         tool_name=call.name,
                     ),

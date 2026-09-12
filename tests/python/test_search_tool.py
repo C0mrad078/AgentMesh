@@ -54,3 +54,19 @@ async def test_search_uses_ripgrep_when_available_and_parses_its_output(tmp_path
     called_argv = mock_run.call_args.args[0]
     assert called_argv[0] == "rg"
     assert "check_password" in called_argv
+    assert "--ignore-case" in called_argv
+    assert "--glob=!node_modules/" in called_argv
+
+
+async def test_search_ripgrep_path_strips_leading_dot_slash(tmp_path: Path) -> None:
+    # `rg` run against `.` prints paths prefixed with `./`; the fallback
+    # scanner never does, so ripgrep's output is normalized to match.
+    tool = SearchTool(tmp_path)
+    fake_result = RunResult(success=True, stdout="./app.js:1:const TODO = 1;\n", stderr="", returncode=0)
+    with (
+        patch("core.tools.search_tool.shutil.which", return_value="/usr/bin/rg"),
+        patch.object(tool._runner, "run", new=AsyncMock(return_value=fake_result)),
+    ):
+        matches = await tool.search("todo")
+
+    assert matches == [SearchMatch(path="app.js", line=1, text="const TODO = 1;")]

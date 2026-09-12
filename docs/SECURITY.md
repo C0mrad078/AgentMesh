@@ -99,12 +99,25 @@ sistema operacional (`core/security/secret_store.py`), nunca em texto puro,
 nunca em variável de ambiente de subprocesso, nunca re-expostas ao frontend
 depois de salvas. `core/security/secret_scanner.py` redige credenciais
 (AWS, chaves privadas, tokens de provedor conhecidos, padrões genéricos
-`chave = valor`) antes que qualquer conteúdo de projeto alcance um modelo ou
-um log. `core/utils/logging.py::redact()` mascara adicionalmente qualquer
-chave de contexto de log com nome que pareça sensível
-(`api_key`/`token`/`password`/...) como uma segunda camada de defesa.
-Testado explicitamente (`tests/python/test_bridge_providers.py`) que salvar
-uma credencial nunca aparece na resposta do comando nem em log.
+`chave = valor`) em dois pontos de aplicação: o contexto inicial montado
+pelo `ContextBuilder` (arquivos relevantes selecionados para a tarefa) e,
+desde uma auditoria posterior a este documento, também a saída de cada
+chamada de ferramenta (`ReadFile`/`SearchFiles`/...) antes de ela virar uma
+mensagem `TOOL` enviada de volta ao provider (`StepExecutor` em
+`core/orchestrator/executor.py`) -- esse segundo ponto era uma lacuna real
+(conteúdo de arquivo podia alcançar o provider sem passar pelo scanner) até
+ser corrigida. `core/utils/logging.py::redact()` mascara adicionalmente
+qualquer chave de contexto de log com nome que pareça sensível
+(`api_key`/`token`/`password`/...) como uma terceira camada de defesa.
+Testado explicitamente (`tests/python/test_bridge_providers.py`,
+`tests/python/test_executor.py::test_executor_redacts_secrets_in_tool_output_before_sending_to_the_provider`)
+que salvar uma credencial nunca aparece na resposta do comando, em log, ou
+em uma mensagem enviada a um provider via uma chamada de ferramenta.
+
+O que a mensagem enviada ao provider é redigida, o registro local (auditoria
+de `tool_calls`/eventos de execução persistidos no banco) ainda guarda a
+saída bruta da ferramenta -- redigir também esse registro é um trabalho
+futuro não coberto ainda.
 
 ## Aprendizado seguro
 

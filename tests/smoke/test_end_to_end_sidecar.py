@@ -23,8 +23,10 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -55,17 +57,32 @@ class SidecarClient:
             text=True,
             bufsize=1,
         )
+        # `Popen.stdout.readline()` is a blocking OS-pipe read with no
+        # timeout of its own -- a `while monotonic() < deadline: readline()`
+        # loop does NOT enforce the deadline, since the deadline is only
+        # checked between calls, never during one; a sidecar that never
+        # writes a line hangs this client forever. A background thread
+        # feeding a `Queue` lets `_read_message` use `Queue.get(timeout=...)`,
+        # which is a real, interruptible wall-clock timeout, and works
+        # identically on Windows (unlike `select()` on a pipe).
+        self._lines: queue.Queue[str] = queue.Queue()
+        self._reader_thread = threading.Thread(target=self._pump_stdout, daemon=True)
+        self._reader_thread.start()
         self.hello = self._read_message(timeout=REQUEST_TIMEOUT_SECONDS)
         assert self.hello["type"] == "hello", f"expected hello, got {self.hello}"
         assert self.hello["session"] == SESSION_TOKEN
 
+    def _pump_stdout(self) -> None:
+        assert self.process.stdout is not None
+        for line in self.process.stdout:
+            self._lines.put(line)
+
     def _read_message(self, timeout: float) -> dict:
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            line = self.process.stdout.readline()
-            if line:
-                return json.loads(line)
-        raise TimeoutError("Timed out waiting for a message from the sidecar.")
+        try:
+            line = self._lines.get(timeout=timeout)
+        except queue.Empty:
+            raise TimeoutError("Timed out waiting for a message from the sidecar.") from None
+        return json.loads(line)
 
     def call(self, command: str, params: dict | None = None) -> dict:
         request = {
@@ -261,3 +278,20 @@ def test_wrong_session_token_is_rejected(data_dir: Path) -> None:
         assert response["error"]["code"] == "UNAUTHORIZED"
     finally:
         client.close()
+
+
+def test_read_message_enforces_a_real_timeout_when_the_sidecar_writes_nothing() -> None:
+    # Regression test: `_read_message` used to loop on the blocking
+    # `Popen.stdout.readline()` with a deadline that was only checked
+    # *between* calls, so a sidecar that never writes a line hung the
+    # client forever instead of raising after `timeout` seconds. The
+    # queue-fed background reader must enforce a real, bounded timeout.
+    client = object.__new__(SidecarClient)
+    client._lines = queue.Queue()  # never fed -- simulates a silent sidecar
+
+    start = time.monotonic()
+    with pytest.raises(TimeoutError):
+        client._read_message(timeout=0.3)
+    elapsed = time.monotonic() - start
+
+    assert elapsed < 2.0, f"_read_message blocked for {elapsed:.2f}s instead of honoring its timeout"

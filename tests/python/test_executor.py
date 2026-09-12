@@ -9,6 +9,7 @@ from core.orchestrator.context_builder import ExecutionContext
 from core.orchestrator.event_bus import EventBus, EventType
 from core.orchestrator.executor import RetryPolicy, StepExecutor
 from core.orchestrator.models import PlanStep, RoutingDecision, StepStatus
+from core.providers.base import MessageRole
 from core.providers.circuit_breaker import CircuitBreaker, CircuitBreakerConfig
 from core.providers.health import ProviderHealthMonitor
 from core.providers.mock_provider import MockProvider, MockScenario
@@ -265,3 +266,39 @@ async def test_executor_tool_call_denied_by_permissions_is_reported_to_model() -
 
     assert result.status == StepStatus.COMPLETED
     assert result.tool_calls[0]["error"] is not None
+
+
+async def test_executor_redacts_secrets_in_tool_output_before_sending_to_the_provider() -> None:
+    class _RecordingProvider(MockProvider):
+        def __init__(self) -> None:
+            super().__init__()
+            self.requests: list = []
+
+        async def execute(self, request):  # type: ignore[override]
+            self.requests.append(request)
+            return await super().execute(request)
+
+    provider = _RecordingProvider()
+    executor, *_ = _make_executor(provider=provider)
+    step = _step(simulate_tool_call={"name": "ReadFile", "arguments": {"path": "secrets.env"}})
+
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory() as tmp:
+        (Path(tmp) / "secrets.env").write_text("AWS_KEY=AKIA1234567890123456", encoding="utf-8")
+        tool_executor = ToolExecutor(tmp)
+        result = await executor.run(
+            step, _routing(step), _agent(tools=["ReadFile"]), system_prompt="sys",
+            context=_context(), tool_executor=tool_executor, execution_id="exec_1",
+        )
+
+    assert result.status == StepStatus.COMPLETED
+    # The second call to the provider is the one carrying the tool result
+    # back as a TOOL-role message -- that message must never contain the
+    # raw secret the file actually held.
+    second_call_messages = provider.requests[1].messages
+    tool_messages = [m for m in second_call_messages if m.role == MessageRole.TOOL]
+    assert len(tool_messages) == 1
+    assert "AKIA1234567890123456" not in tool_messages[0].content
+    assert "[REDACTED" in tool_messages[0].content

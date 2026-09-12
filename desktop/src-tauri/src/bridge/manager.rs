@@ -63,7 +63,9 @@ const MESSAGE_EVENT: &str = "orchestrator://event";
 pub enum BridgeStatus {
     Initializing,
     Connected,
-    Reconnecting { attempt: u32 },
+    Reconnecting {
+        attempt: u32,
+    },
     Offline,
     /// The sidecar crash-looped `MAX_RESTARTS_PER_WINDOW` times within
     /// `RESTART_WINDOW`. Distinct from `Offline` (which still implies "the
@@ -71,7 +73,9 @@ pub enum BridgeStatus {
     /// means automatic retries have stopped and the user must explicitly
     /// ask to try again (see `reconnect_now`).
     Unavailable,
-    Error { message: String },
+    Error {
+        message: String,
+    },
 }
 
 fn backoff_for(attempt: u32) -> Duration {

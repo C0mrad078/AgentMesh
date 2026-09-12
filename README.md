@@ -6,7 +6,9 @@ coordenação de múltiplas inteligências artificiais (Claude, Gemini,
 Codex/OpenAI) para tarefas reais de engenharia de software: planejar,
 implementar, testar, revisar, corrigir e aprender com o resultado.
 
-Este repositório contém a primeira versão completa (v1.0) do projeto,
+Este repositório contém a primeira versão completa do projeto (versão de
+pacote atual: `0.1.0` em `package.json`/`Cargo.toml`/`pyproject.toml` --
+ainda não houve um corte de release formal, ver `docs/RELEASE.md`),
 construída em quatro estágios sobre a mesma arquitetura (nenhum estágio
 recriou o anterior):
 
@@ -361,10 +363,13 @@ ressalvas", pelos motivos abaixo — nenhum foi escondido:
 
 1. **Empacotamento distribuível (PyInstaller/Nuitka + Tauri bundle) foi
    projetado e documentado (`docs/BUILD.md`), mas nenhum artefato assinado
-   ou notarizado foi de fato gerado neste ambiente** — ele não tem certificado
-   de assinatura Apple/Windows nem o toolchain Rust (`cargo`) instalado.
-   Marcado explicitamente como `UNVERIFIED EXTERNAL DEPENDENCY` em
-   `docs/BUILD.md`/`docs/RELEASE.md`.
+   ou notarizado foi de fato gerado neste ambiente** — o shell Rust/Tauri
+   compila e passa em `cargo fmt`/`clippy`/`test` normalmente aqui (uma
+   correção anterior desta seção, que afirmava não haver toolchain Rust
+   disponível, estava errada), mas não há certificado de assinatura de
+   código Apple/Windows nem o restante do pipeline de empacotamento
+   nativo executado. Marcado explicitamente como `UNVERIFIED EXTERNAL
+   DEPENDENCY` em `docs/BUILD.md`/`docs/RELEASE.md`.
 2. **O pipeline de CI (`.github/workflows/ci.yml`) está configurado mas nunca
    foi executado** — este ambiente não tem um runner do GitHub Actions. A
    sintaxe do YAML foi validada estaticamente; a primeira execução real

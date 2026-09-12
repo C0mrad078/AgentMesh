@@ -1,14 +1,21 @@
 # Empacotamento (build de distribuição)
 
 Este documento descreve como o Orquestrador é (e será) empacotado como
-aplicativo desktop instalável em macOS e Windows. **Nada neste documento foi
-executado neste ambiente de desenvolvimento** — não há aqui um toolchain de
-build completo (Xcode/`codesign`/`notarytool`, WiX/Authenticode, nem mesmo
-`cargo`/Rust). Cada etapa que depende de uma ferramenta ou credencial
-externa está marcada explicitamente como `UNVERIFIED EXTERNAL DEPENDENCY` —
-o processo está documentado com precisão suficiente para ser executado e
-verificado em uma máquina com o toolchain real, mas não foi verificado
-aqui.
+aplicativo desktop instalável em macOS e Windows. **A maior parte deste
+documento ainda não foi executada até o fim neste ambiente de
+desenvolvimento.** Correção sobre uma versão anterior desta nota: o
+toolchain Rust (`cargo`/`rustc`) **está** disponível nesta máquina (só não
+estava no `PATH` de sessões de shell anteriores) — `cargo check`, `cargo
+test`, `cargo clippy -- -D warnings` e `cargo fmt -- --check` rodam e
+passam limpos contra `desktop/src-tauri`, incluindo o `npm run tauri dev`
+completo (janela nativa + sidecar Python conectado). O que continua
+genuinamente ausente aqui é o restante do toolchain de empacotamento e
+assinatura (Xcode `codesign`/`notarytool`, WiX/Authenticode, PyInstaller) e
+qualquer credencial de assinatura de código. Cada etapa abaixo que depende
+de uma dessas ferramentas ou credenciais externas está marcada
+explicitamente como `UNVERIFIED EXTERNAL DEPENDENCY` — o processo está
+documentado com precisão suficiente para ser executado e verificado em uma
+máquina com o toolchain completo, mas não foi verificado aqui.
 
 ## Visão geral do pipeline de empacotamento
 

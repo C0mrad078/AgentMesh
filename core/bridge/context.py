@@ -111,6 +111,7 @@ from core.providers.registry import DEFAULT_MODELS, ModelRegistry
 from core.security.audit import AuditLogger
 from core.security.secret_store import SecretStore, create_secret_store
 from core.tasks.service import TaskService
+from core.utils.logging import get_logger
 
 
 @dataclass
@@ -178,6 +179,9 @@ class BridgeContext:
         await self.db.close()
 
 
+logger = get_logger("bridge.context")
+
+
 async def build_context(
     db_path: Path | str,
     *,
@@ -188,6 +192,11 @@ async def build_context(
 ) -> BridgeContext:
     db = Database(db_path)
     await db.connect()
+    if not await db.quick_integrity_check():
+        # Never block startup on this -- a corrupted database is exactly
+        # the situation where the user still needs to reach Settings ->
+        # Dados to restore from a backup, not be locked out of the app.
+        logger.error("database_quick_integrity_check_failed_at_startup")
 
     audit_logger = AuditLogger(AuditLogsRepository(db))
     project_service = ProjectService(ProjectsRepository(db), audit_logger)

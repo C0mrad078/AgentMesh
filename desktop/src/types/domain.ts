@@ -139,6 +139,13 @@ export interface ProviderInfo {
   health: ProviderHealthStatus;
 }
 
+export interface ProviderHealthRecord {
+  provider: string;
+  status: ProviderHealthStatus;
+  last_error: string | null;
+  consecutive_failures: number;
+}
+
 // --- Stage 5: CLI-wrapped providers (Codex CLI, Claude Code CLI, Gemini CLI) --
 
 export type CliProviderName = "codex_cli" | "claude_code_cli" | "gemini_cli";

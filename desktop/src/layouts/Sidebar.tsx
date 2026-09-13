@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { Plus, MessagesSquare, History, Bot, Settings, GraduationCap } from "lucide-react";
+import { Plus, MessagesSquare, History, Bot, Settings, GraduationCap, Building2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
@@ -8,6 +8,7 @@ import { useProjectsStore } from "@/stores/projectsStore";
 import { useUiStore, type AppPage } from "@/stores/uiStore";
 
 const NAV_ITEMS: { page: AppPage; label: string; icon: typeof MessagesSquare }[] = [
+  { page: "office", label: "Office", icon: Building2 },
   { page: "workspace", label: "Tarefas", icon: MessagesSquare },
   { page: "executions", label: "Execuções", icon: History },
   { page: "agents", label: "Agentes", icon: Bot },

@@ -5,6 +5,7 @@ import { NewProjectDialog } from "@/components/NewProjectDialog";
 import { useUiStore, type AppPage } from "@/stores/uiStore";
 
 const PAGE_TITLES: Record<AppPage, string> = {
+  office: "Office",
   workspace: "Tarefas",
   executions: "Execuções",
   agents: "Agentes",

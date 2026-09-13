@@ -29,6 +29,7 @@ import type {
   Project,
   PromptProposalEvent,
   PromptVersion,
+  ProviderHealthRecord,
   ProviderInfo,
   ProviderName,
   ReflectionRecord,
@@ -93,7 +94,7 @@ export const executionsApi = {
 
 export const providersApi = {
   list: () => invokeBridge<ProviderInfo[]>("provider.list"),
-  health: () => invokeBridge<{ provider: string; status: string; last_error: string | null; consecutive_failures: number }[]>(
+  health: () => invokeBridge<ProviderHealthRecord[]>(
     "provider.health",
   ),
   setCredential: (provider: ProviderName, api_key: string) =>

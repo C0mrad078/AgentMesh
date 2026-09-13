@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import type { TaskMode } from "@/types";
 
-export type AppPage = "workspace" | "executions" | "agents" | "settings" | "learning";
+export type AppPage = "office" | "workspace" | "executions" | "agents" | "settings" | "learning";
 
 interface UiState {
   activePage: AppPage;
@@ -15,7 +15,10 @@ interface UiState {
 }
 
 export const useUiStore = create<UiState>((set) => ({
-  activePage: "workspace",
+  // Virtual Office is the new default landing page (spec section 4) --
+  // Workspace ("Classic Dashboard") remains one click away and fully
+  // functional (spec section 34: the Office is never mandatory).
+  activePage: "office",
   setActivePage: (page) => set({ activePage: page }),
   newProjectDialogOpen: false,
   setNewProjectDialogOpen: (open) => set({ newProjectDialogOpen: open }),

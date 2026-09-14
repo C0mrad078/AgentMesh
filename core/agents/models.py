@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from enum import Enum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from core.runtime.execution_backend import ExecutionBackendType
 
@@ -87,7 +87,53 @@ class Agent(BaseModel):
     preferred_backend: ExecutionBackendType | None = None
     fallback_backend: ExecutionBackendType | None = None
     memory_profile: dict[str, str] = Field(default_factory=dict)
+    # AgentMash V2, Phase 4 (docs/agentmash-v2-phase4.md): the primary
+    # signal the Pixel Office uses to decide which project an agent
+    # belongs to -- Team membership (see `core.teams`) is a secondary,
+    # orthogonal grouping, not what drives per-project Office filtering.
+    project_id: str | None = None
+    # Deliberately just `{"preset": "<key>"}` -- one of the finite set of
+    # real, already-rendered visual presets the frontend knows about, not
+    # the richer skin/hair/outfit breakdown sketched in the product brief.
+    # The backend never validates specific preset values (that catalog is
+    # a frontend/asset concern); an unrecognized or absent preset falls
+    # back to a deterministic (hash of `id`) one client-side, never a
+    # random one -- see `game/agents/visualProfile.ts`.
+    visual_profile: dict[str, str] = Field(default_factory=dict)
 
     @property
     def effective_preferred_provider(self) -> str:
         return self.preferred_provider or self.provider
+
+
+class AgentCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    role: str = Field(default="", max_length=200)
+    description: str = Field(default="", max_length=4000)
+    provider: str = "mock"
+    model: str = ""
+    capabilities: list[AgentCapability] = Field(default_factory=list)
+    preferred_backend: ExecutionBackendType | None = None
+    fallback_backend: ExecutionBackendType | None = None
+    project_id: str | None = None
+    visual_profile: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("name")
+    @classmethod
+    def _strip_name(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("Agent name cannot be blank.")
+        return stripped
+
+
+class AgentUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    role: str | None = Field(default=None, max_length=200)
+    description: str | None = Field(default=None, max_length=4000)
+    provider: str | None = None
+    preferred_backend: ExecutionBackendType | None = None
+    fallback_backend: ExecutionBackendType | None = None
+    project_id: str | None = None
+    active: bool | None = None
+    visual_profile: dict[str, str] | None = None

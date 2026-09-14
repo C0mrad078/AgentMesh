@@ -1,43 +1,52 @@
 import { destinationPoint } from "@/game/maps/agentmashHq";
 import { occupancySystem } from "@/game/systems/OccupancySystem";
-import { AGENT_DEFINITIONS } from "@/game/agents/appearancePresets";
 import type { GridPosition } from "@/game/systems/NavigationService";
 
 /**
- * Spec section 36 ("Workstation System"): every desk is `{ desk, chair,
- * computer, approach_point, seat_point }`. The tilemap already places
- * the desk/chair/computer sprites and the chair's own tile as the seat
- * point (`destinationPoint(homeDesk)`); the approach point is derived
- * geometrically (one tile further from the desk) rather than hand
- * -authored a second time in the map.
+ * AgentMash V2, Phase 4 (docs/agentmash-v2-phase4.md "DESK ASSIGNMENT" /
+ * "OVERFLOW"): the map physically has four authored desk positions
+ * (`ceo_office`, `design_desk`, `frontend_desk`, `backend_desk` -- real
+ * named points in `agentmashHq.json`, unchanged this phase). Stage 2/3
+ * bound each one permanently to one of exactly 4 fixed character ids;
+ * now that any number of real agents can be assigned to a project, this
+ * is a real, anonymous *pool* instead -- claimed by whichever real
+ * agent id asks first, exactly like `SofaSystem`/`BedSystem`/
+ * `MeetingRoomSystem` already do for their own pooled resources (this
+ * was the one outlier still doing fixed 1:1 binding).
+ *
+ * `WORKSTATION_CAPACITY` (4) is the current, honest, documented limit: a
+ * 5th+ simultaneously-active agent in one project does not crash or
+ * silently overwrite another's desk -- `AgentStateMachine` sends it to
+ * the lounge (an overflow gathering area) instead, exactly the "overflow
+ * zone" the brief asks for. Growing capacity later means adding more
+ * named desk points to the map, not changing this system's shape.
  */
 export interface Workstation {
-  agentId: string;
+  deskId: string;
   seatPoint: GridPosition;
   approachPoint: GridPosition;
 }
 
-const WORKSTATIONS: Workstation[] = AGENT_DEFINITIONS.map((agent) => {
-  const [sx, sy] = destinationPoint(agent.homeDesk);
-  return { agentId: agent.id, seatPoint: { x: sx, y: sy }, approachPoint: { x: sx, y: sy + 1 } };
+const DESK_IDS = ["ceo_office", "design_desk", "frontend_desk", "backend_desk"] as const;
+
+const DESKS: Workstation[] = DESK_IDS.map((deskId) => {
+  const [sx, sy] = destinationPoint(deskId);
+  return { deskId, seatPoint: { x: sx, y: sy }, approachPoint: { x: sx, y: sy + 1 } };
 });
 
-const BY_AGENT = new Map(WORKSTATIONS.map((w) => [w.agentId, w]));
+export const WORKSTATION_CAPACITY = DESKS.length;
 
 export class WorkstationSystem {
-  forAgent(agentId: string): Workstation | undefined {
-    return BY_AGENT.get(agentId);
+  all(): Workstation[] {
+    return DESKS;
   }
 
-  /** Every agent's own desk is exclusively theirs -- claiming it never
-   * fails once assigned once, but still goes through `OccupancySystem`
-   * so the same spot-tracking mechanism covers desks, beds, and sofas
-   * uniformly. */
+  /** Claims whichever desk this agent already holds, or the first free
+   * one in the pool. `null` means every desk is taken (overflow) --
+   * never a crash, never a silently-shared desk. */
   claim(agentId: string): Workstation | null {
-    const workstation = BY_AGENT.get(agentId);
-    if (!workstation) return null;
-    const spotId = `desk:${agentId}`;
-    return occupancySystem.claim(spotId, agentId) ? workstation : null;
+    const deskId = occupancySystem.claimAny(DESKS.map((d) => d.deskId), agentId);
+    return deskId ? DESKS.find((d) => d.deskId === deskId)! : null;
   }
 
   release(agentId: string): void {

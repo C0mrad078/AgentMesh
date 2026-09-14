@@ -4,6 +4,8 @@ import { PhaserOffice, type PhaserOfficeHandle } from "@/components/PhaserOffice
 import { AgentDetailPanel } from "@/components/AgentDetailPanel";
 import { Button } from "@/components/ui/button";
 import { useUiStore } from "@/stores/uiStore";
+import { useProjectsStore } from "@/stores/projectsStore";
+import { useOfficeSelectionStore } from "@/stores/officeSelectionStore";
 import type { AgentInspectInfo, OfficeSummary } from "@/game/scenes/OfficeScene";
 import { officeSimulationService } from "@/game/simulation/OfficeSimulationService";
 
@@ -23,6 +25,22 @@ export function OfficePage() {
   const [followingAgentId, setFollowingAgentId] = useState<string | null>(null);
   const [devMode, setDevMode] = useState(false);
   const phaserRef = useRef<PhaserOfficeHandle>(null);
+
+  // AgentMash V2, Phase 4 "OFFICE FILTER": which real project(s) the
+  // Office shows -- read/written here, consumed by `useOfficeDomainSync`
+  // (real filtering, tested in `buildOfficeAgents.test.ts`), never a
+  // purely-visual toggle with no effect on what's actually populated.
+  const projects = useProjectsStore((s) => s.projects);
+  const selectedProjectId = useProjectsStore((s) => s.selectedProjectId);
+  const selectProject = useProjectsStore((s) => s.selectProject);
+  const viewMode = useOfficeSelectionStore((s) => s.viewMode);
+  const setViewMode = useOfficeSelectionStore((s) => s.setViewMode);
+
+  // Dev Mode's per-agent debug actions (rate limit/recover/testing/error/
+  // complete) need *some* real target -- the selected or hovered agent,
+  // never a hardcoded id (Phase 4 retired the fixed 4-character roster
+  // these used to be wired to).
+  const devTargetAgentId = selectedAgent?.id ?? hoveredAgent?.id ?? null;
 
   function refreshSelected() {
     if (!selectedAgent) return;
@@ -58,7 +76,26 @@ export function OfficePage() {
         onSummaryChange={handleSummaryChange}
       />
 
-      <div className="pointer-events-none absolute left-3 top-3">
+      <div className="pointer-events-none absolute left-3 top-3 flex flex-col items-start gap-1.5">
+        <select
+          className="pointer-events-auto rounded-md border border-border bg-card/90 px-2 py-1 text-xs shadow backdrop-blur"
+          aria-label="Filtro de projeto do Office"
+          value={viewMode === "all" ? "all" : (selectedProjectId ?? "")}
+          onChange={(e) => {
+            if (e.target.value === "all") {
+              setViewMode("all");
+            } else {
+              setViewMode("project");
+              selectProject(e.target.value);
+            }
+          }}
+        >
+          <option value="all">Todos os projetos</option>
+          {projects.map((project) => (
+            <option key={project.id} value={project.id}>{project.name}</option>
+          ))}
+        </select>
+
         <div className="pointer-events-auto flex items-center gap-3 rounded-md border border-border bg-card/85 px-3 py-1.5 text-xs text-muted-foreground shadow backdrop-blur">
           <span>{summary.working} trabalhando</span>
           <span>{summary.meeting} em reunião</span>
@@ -115,13 +152,36 @@ export function OfficePage() {
           <DevButton label="Start Workday" onClick={() => officeSimulationService.startWorkday()} />
           <DevButton label="Start Planning Meeting" onClick={() => officeSimulationService.startPlanningMeeting()} />
           <DevButton label="End Meeting" onClick={() => officeSimulationService.endMeeting()} />
-          <DevButton label="Rate Limit Codex" onClick={() => officeSimulationService.rateLimitShort("agent_codex", "codex_cli")} />
-          <DevButton label="Long Cooldown Claude" onClick={() => officeSimulationService.rateLimitLong("agent_claude_code", "claude_code_cli")} />
-          <DevButton label="Recover Codex" onClick={() => officeSimulationService.recover("agent_codex")} />
-          <DevButton label="Recover Claude" onClick={() => officeSimulationService.recover("agent_claude_code")} />
-          <DevButton label="Send to Testing" onClick={() => officeSimulationService.sendToTesting("agent_claude_code")} />
-          <DevButton label="Trigger Error" onClick={() => officeSimulationService.triggerError("agent_codex", "Falha simulada")} />
-          <DevButton label="Complete Task" onClick={() => officeSimulationService.completeTask("agent_codex")} />
+          <DevButton
+            label="Rate Limit (selecionado)"
+            disabled={!devTargetAgentId}
+            onClick={() => devTargetAgentId && officeSimulationService.rateLimitShort(devTargetAgentId)}
+          />
+          <DevButton
+            label="Long Cooldown (selecionado)"
+            disabled={!devTargetAgentId}
+            onClick={() => devTargetAgentId && officeSimulationService.rateLimitLong(devTargetAgentId)}
+          />
+          <DevButton
+            label="Recover (selecionado)"
+            disabled={!devTargetAgentId}
+            onClick={() => devTargetAgentId && officeSimulationService.recover(devTargetAgentId)}
+          />
+          <DevButton
+            label="Send to Testing (selecionado)"
+            disabled={!devTargetAgentId}
+            onClick={() => devTargetAgentId && officeSimulationService.sendToTesting(devTargetAgentId)}
+          />
+          <DevButton
+            label="Trigger Error (selecionado)"
+            disabled={!devTargetAgentId}
+            onClick={() => devTargetAgentId && officeSimulationService.triggerError(devTargetAgentId, "Falha simulada")}
+          />
+          <DevButton
+            label="Complete Task (selecionado)"
+            disabled={!devTargetAgentId}
+            onClick={() => devTargetAgentId && officeSimulationService.completeTask(devTargetAgentId)}
+          />
           <DevButton label="Reset Office" onClick={() => officeSimulationService.resetOffice()} />
         </div>
       )}
@@ -149,9 +209,9 @@ export function OfficePage() {
   );
 }
 
-function DevButton({ label, onClick }: { label: string; onClick: () => void }) {
+function DevButton({ label, onClick, disabled }: { label: string; onClick: () => void; disabled?: boolean }) {
   return (
-    <Button size="sm" variant="outline" className="h-7 text-xs" onClick={onClick}>
+    <Button size="sm" variant="outline" className="h-7 text-xs" onClick={onClick} disabled={disabled}>
       {label}
     </Button>
   );

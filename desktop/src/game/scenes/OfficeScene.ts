@@ -4,9 +4,10 @@ import { TILE_COMPUTER } from "@/game/maps/tileIds";
 import { Agent } from "@/game/entities/Agent";
 import { CameraController } from "@/game/systems/CameraController";
 import { roomRegistry } from "@/game/systems/RoomRegistry";
-import { AGENT_DEFINITIONS } from "@/game/agents/appearancePresets";
+import { buildAgentDefinition } from "@/game/agents/appearancePresets";
 import { agentStateMachine } from "@/game/agents/AgentStateMachine";
-import type { AgentRuntimeState } from "@/game/agents/types";
+import { officeRosterStore, type OfficeRoster } from "@/game/agents/officeRosterStore";
+import type { AgentDefinition, AgentRuntimeState } from "@/game/agents/types";
 import type { GridPosition } from "@/game/systems/NavigationService";
 
 const WORLD_WIDTH = MAP_COLS * TILE_SIZE;
@@ -61,20 +62,31 @@ export interface AgentInspectInfo {
 
 /**
  * The autonomous 2D office (Stage 2 -- see GAME_ENGINE.md). Renders the
- * real `agentmashHq.json` tilemap and owns the four named agents (Gemini
- * CEO, Gemini Designer, Codex, Claude Code), whose every movement is a
- * direct consequence of `AgentStateMachine` state -- there is no
- * user-controlled character and no click-to-move (spec section 30).
- * The user only ever commands the camera and, in Developer Mode, the
- * `OfficeSimulationService` debug controls exposed by `OfficePage`.
+ * real `agentmashHq.json` tilemap; every character it shows and every
+ * movement they make is a direct consequence of real domain state --
+ * there is no user-controlled character and no click-to-move (spec
+ * section 30). The user only ever commands the camera and, in Developer
+ * Mode, the `OfficeSimulationService` debug controls exposed by
+ * `OfficePage`.
+ *
+ * AgentMash V2, Phase 4 (docs/agentmash-v2-phase4.md): the roster is no
+ * longer a fixed 4-entry array baked in at `create()` time -- it starts
+ * empty and reacts to `officeRosterStore` (written by
+ * `OfficeDomainAdapter`, itself fed by real, persisted `Agent`/`Team`/
+ * `Session` rows), spawning/updating/despawning real `Agent` game objects
+ * as the real roster changes. This scene never imports anything from
+ * `@/services`, `@/stores`, or `@/types` -- it only ever reacts to
+ * already-computed state (spec "NÃO ACOPLAR PHASER AO BACKEND").
  */
 export class OfficeScene extends Phaser.Scene {
   private agents = new Map<string, Agent>();
+  private definitions = new Map<string, AgentDefinition>();
   private camera!: CameraController;
   private debugGraphics!: Phaser.GameObjects.Graphics;
   private debugText!: Phaser.GameObjects.Text;
   private debugEnabled = false;
   private unsubscribeStateMachine: (() => void) | null = null;
+  private unsubscribeRoster: (() => void) | null = null;
   private hoveredAgentId: string | null = null;
 
   constructor() {
@@ -103,29 +115,18 @@ export class OfficeScene extends Phaser.Scene {
 
     this.drawInteractiveObjectSprites();
 
-    for (const def of AGENT_DEFINITIONS) {
-      const agent = new Agent(this, def, { x: AGENTS_ENTRY[0], y: AGENTS_ENTRY[1] });
-      agent.sprite.setInteractive({ useHandCursor: true });
-      agent.sprite.on("pointerover", () => {
-        this.hoveredAgentId = def.id;
-        this.events.emit("agent:hover", def.id);
-      });
-      agent.sprite.on("pointerout", () => {
-        if (this.hoveredAgentId === def.id) this.hoveredAgentId = null;
-        this.events.emit("agent:hover", null);
-      });
-      agent.sprite.on("pointerdown", () => this.events.emit("agent:click", def.id));
-      this.agents.set(def.id, agent);
-    }
-
     this.unsubscribeStateMachine = agentStateMachine.onChange((agentId, runtime) => {
       this.agents.get(agentId)?.applyRuntimeState(runtime);
       this.events.emit("agents:summary", summarize(agentStateMachine.all()));
     });
-    // Send everyone from the shared entry point to their own desk --
-    // spec section 8's flow ("TASK ASSIGNED -> MOVING -> DESK -> SIT")
-    // starts visible from the very first frame.
-    this.time.delayedCall(300, () => agentStateMachine.resetAll());
+
+    // Real roster reconstruction (crash/reload recovery, spec section
+    // 72/73's spirit applied to the domain layer): apply whatever
+    // `OfficeDomainAdapter` already knows immediately, then react to
+    // every future change -- never wait for a fresh push before showing
+    // agents that were already real when this scene was created.
+    this.applyRoster(officeRosterStore.get());
+    this.unsubscribeRoster = officeRosterStore.subscribe((roster) => this.applyRoster(roster));
 
     this.camera = new CameraController(this, WORLD_WIDTH, WORLD_HEIGHT);
     this.camera.fit();
@@ -147,7 +148,54 @@ export class OfficeScene extends Phaser.Scene {
       this.positionDebugText();
     });
 
-    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.unsubscribeStateMachine?.());
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      this.unsubscribeStateMachine?.();
+      this.unsubscribeRoster?.();
+    });
+  }
+
+  /** The one place real agents become (or stop being) Phaser game
+   * objects -- spawns a new `Agent` for a roster id never seen before,
+   * despawns one no longer present, and respawns one whose visual
+   * identity changed (a name/preset edited in Team while the Office was
+   * open). Never touches ids the roster didn't mention. */
+  private applyRoster(roster: OfficeRoster): void {
+    const nextIds = new Set(roster.models.map((m) => m.agentId));
+
+    for (const [agentId, agent] of this.agents) {
+      if (!nextIds.has(agentId)) {
+        agent.destroy();
+        this.agents.delete(agentId);
+        this.definitions.delete(agentId);
+      }
+    }
+
+    for (const model of roster.models) {
+      const def = buildAgentDefinition(model, roster.showProjectLabels);
+      const previous = this.definitions.get(model.agentId);
+      const identityChanged = previous && (previous.textureKey !== def.textureKey || previous.name !== def.name);
+
+      if (!previous || identityChanged) {
+        this.agents.get(model.agentId)?.destroy();
+        const spawnTile = this.agents.get(model.agentId)?.tilePosition
+          ?? { x: AGENTS_ENTRY[0], y: AGENTS_ENTRY[1] };
+        const agent = new Agent(this, def, spawnTile);
+        agent.sprite.setInteractive({ useHandCursor: true });
+        agent.sprite.on("pointerover", () => {
+          this.hoveredAgentId = model.agentId;
+          this.events.emit("agent:hover", model.agentId);
+        });
+        agent.sprite.on("pointerout", () => {
+          if (this.hoveredAgentId === model.agentId) this.hoveredAgentId = null;
+          this.events.emit("agent:hover", null);
+        });
+        agent.sprite.on("pointerdown", () => this.events.emit("agent:click", model.agentId));
+        this.agents.set(model.agentId, agent);
+      }
+      this.definitions.set(model.agentId, def);
+    }
+
+    this.events.emit("agents:summary", summarize(agentStateMachine.all()));
   }
 
   private positionDebugText(): void {
@@ -210,10 +258,10 @@ export class OfficeScene extends Phaser.Scene {
       g.strokePath();
     }
 
-    const lines = [`FPS: ${this.game.loop.actualFps.toFixed(0)}`];
-    for (const def of AGENT_DEFINITIONS) {
-      const agent = this.agents.get(def.id)!;
-      const runtime = agentStateMachine.get(def.id);
+    const lines = [`FPS: ${this.game.loop.actualFps.toFixed(0)}`, `Agents: ${this.agents.size}`];
+    for (const [agentId, def] of this.definitions) {
+      const agent = this.agents.get(agentId)!;
+      const runtime = agentStateMachine.get(agentId);
       const room = roomRegistry.at(agent.tilePosition.x, agent.tilePosition.y);
       const status = agent.isMoving ? "MOVING" : (runtime?.state ?? "?");
       lines.push(`${def.name}: ${status} @ ${room ?? "corridor"} (${agent.tilePosition.x},${agent.tilePosition.y})`);
@@ -258,7 +306,7 @@ export class OfficeScene extends Phaser.Scene {
   /** Spec section 32: clicking (or hovering) an agent never controls it
    * -- it only surfaces read-only inspection data for the UI. */
   inspect(agentId: string): AgentInspectInfo | null {
-    const def = AGENT_DEFINITIONS.find((a) => a.id === agentId);
+    const def = this.definitions.get(agentId);
     const agent = this.agents.get(agentId);
     const runtime = agentStateMachine.get(agentId);
     if (!def || !agent || !runtime) return null;
@@ -278,7 +326,7 @@ export class OfficeScene extends Phaser.Scene {
   }
 
   listAgents(): AgentInspectInfo[] {
-    return AGENT_DEFINITIONS.map((a) => this.inspect(a.id)!).filter(Boolean);
+    return [...this.definitions.keys()].map((id) => this.inspect(id)!).filter(Boolean);
   }
 }
 

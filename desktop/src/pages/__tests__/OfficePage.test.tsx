@@ -53,9 +53,33 @@ vi.mock("@/game/simulation/OfficeSimulationService", () => ({
 
 import { OfficePage } from "@/pages/OfficePage";
 import { useUiStore } from "@/stores/uiStore";
+import { useProjectsStore } from "@/stores/projectsStore";
+import { useOfficeSelectionStore } from "@/stores/officeSelectionStore";
 import { officeSimulationService } from "@/game/simulation/OfficeSimulationService";
 
 describe("OfficePage", () => {
+  it("the project filter lists real projects and switching to 'All Projects' updates real selection state", async () => {
+    useProjectsStore.setState({
+      projects: [
+        { id: "proj_a", name: "AgentMash", description: "", workspace_path: null, status: "active", config: {}, created_at: "now", updated_at: "now" },
+        { id: "proj_b", name: "NerdVerso", description: "", workspace_path: null, status: "active", config: {}, created_at: "now", updated_at: "now" },
+      ],
+      selectedProjectId: "proj_a", loaded: true, loading: false, error: null,
+    });
+    useOfficeSelectionStore.setState({ viewMode: "project" });
+
+    render(<OfficePage />);
+    const select = screen.getByLabelText("Filtro de projeto do Office") as HTMLSelectElement;
+    expect(select.value).toBe("proj_a");
+
+    await userEvent.selectOptions(select, "all");
+    expect(useOfficeSelectionStore.getState().viewMode).toBe("all");
+
+    await userEvent.selectOptions(select, "proj_b");
+    expect(useOfficeSelectionStore.getState().viewMode).toBe("project");
+    expect(useProjectsStore.getState().selectedProjectId).toBe("proj_b");
+  });
+
   it("shows real roster stats derived from the state machine summary, never a fabricated count", async () => {
     render(<OfficePage />);
     expect(screen.getByText("0 trabalhando")).toBeInTheDocument();
@@ -91,13 +115,25 @@ describe("OfficePage", () => {
     await userEvent.click(screen.getByText("Start Workday"));
     expect(officeSimulationService.startWorkday).toHaveBeenCalled();
 
-    await userEvent.click(screen.getByText("Rate Limit Codex"));
-    expect(officeSimulationService.rateLimitShort).toHaveBeenCalledWith("agent_codex", "codex_cli");
-
-    await userEvent.click(screen.getByText("Long Cooldown Claude"));
-    expect(officeSimulationService.rateLimitLong).toHaveBeenCalledWith("agent_claude_code", "claude_code_cli");
-
     await userEvent.click(screen.getByText("Reset Office"));
     expect(officeSimulationService.resetOffice).toHaveBeenCalled();
+  });
+
+  it("per-agent debug actions are disabled with no selection, and target the real selected agent once one is picked", async () => {
+    render(<OfficePage />);
+    await userEvent.click(screen.getByRole("button", { name: "Alternar Developer Mode" }));
+
+    // Phase 4: retired the hardcoded "agent_codex"/"agent_claude_code"
+    // buttons -- these act on whichever real agent is selected/hovered.
+    expect(screen.getByText("Rate Limit (selecionado)")).toBeDisabled();
+
+    await userEvent.click(screen.getByText("mock-click-codex")); // selects the real agent from the click event
+    expect(screen.getByText("Rate Limit (selecionado)")).not.toBeDisabled();
+
+    await userEvent.click(screen.getByText("Rate Limit (selecionado)"));
+    expect(officeSimulationService.rateLimitShort).toHaveBeenCalledWith("agent_codex");
+
+    await userEvent.click(screen.getByText("Complete Task (selecionado)"));
+    expect(officeSimulationService.completeTask).toHaveBeenCalledWith("agent_codex");
   });
 });

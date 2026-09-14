@@ -1,5 +1,5 @@
 import { ROOMS, roomAt, roomLabel, type RoomDefinition } from "@/game/maps/agentmashHq";
-import type { RoomId } from "@/office/types";
+import type { RoomId } from "@/game/maps/roomTypes";
 
 /**
  * Spec section 30/31/41 ("Zonas semânticas" / "RoomRegistry"): answers

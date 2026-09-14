@@ -37,6 +37,9 @@ function makeAgent(id: string, name: string): Agent {
     preferred_backend: null,
     fallback_backend: null,
     memory_profile: {},
+    project_id: null,
+    visual_profile: {},
+    team_ids: [],
   };
 }
 

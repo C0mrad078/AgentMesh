@@ -1,4 +1,3 @@
-import { AGENT_DEFINITIONS, agentDefinition } from "@/game/agents/appearancePresets";
 import { initialRuntimeState, type AgentRuntimeState, type AgentState, type DestinationId } from "@/game/agents/types";
 import { workstationSystem } from "@/game/systems/WorkstationSystem";
 import { bedSystem } from "@/game/systems/BedSystem";
@@ -9,9 +8,14 @@ import { meetingRoomSystem } from "@/game/systems/MeetingRoomSystem";
  * Spec section 55: `SimulationService -> AgentEvent -> AgentStateMachine
  * -> VirtualOfficeController -> Movement/Animation`. This module is that
  * middle step -- the single authority for "given this event, what state
- * is the agent in now, and where does their body belong". Stage 3 will
- * feed it real Orchestrator events instead of `OfficeSimulationService`
- * ones; nothing here needs to change for that swap.
+ * is the agent in now, and where does their body belong".
+ *
+ * AgentMash V2, Phase 4 (docs/agentmash-v2-phase4.md): this used to be
+ * seeded once, at construction, from a fixed 4-entry `AGENT_DEFINITIONS`
+ * array. It now starts empty and grows/shrinks with `ensureAgent`/
+ * `removeAgent`, called by `OfficeDomainAdapter` for whichever real,
+ * persisted agents are actually assigned to the selected project --
+ * never a hardcoded roster.
  */
 
 export type TaskCategory = "coding" | "designing" | "researching" | "planning";
@@ -93,12 +97,6 @@ export class AgentStateMachine {
   private listeners = new Set<Listener>();
   sleepThresholdMs = DEFAULT_SLEEP_THRESHOLD_MS;
 
-  constructor() {
-    for (const agent of AGENT_DEFINITIONS) {
-      this.records.set(agent.id, { runtime: initialRuntimeState(agent.id), savedTask: null });
-    }
-  }
-
   onChange(listener: Listener): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
@@ -112,16 +110,46 @@ export class AgentStateMachine {
     return [...this.records.values()].map((r) => r.runtime);
   }
 
-  /** Sends every agent to their own desk, IDLE, with no saved task --
-   * spec section 53's "Reset Office" debug control. */
+  /** Registers a real agent id if it isn't already known -- idempotent,
+   * safe to call on every sync. The Office's roster (which real agent
+   * ids exist at all) is decided entirely by whoever calls this, never
+   * invented here. */
+  ensureAgent(agentId: string): void {
+    if (!this.records.has(agentId)) {
+      this.records.set(agentId, { runtime: initialRuntimeState(agentId), savedTask: null });
+    }
+  }
+
+  /** The inverse of `ensureAgent` -- releases every spot the agent held
+   * (desk/bed/sofa/meeting seat) and forgets it entirely. Called when a
+   * real agent is no longer assigned to the selected project (or was
+   * deleted/disabled) so it doesn't linger as a ghost record. */
+  removeAgent(agentId: string): void {
+    meetingRoomSystem.release(agentId);
+    sofaSystem.release(agentId);
+    bedSystem.release(agentId);
+    workstationSystem.release(agentId);
+    this.records.delete(agentId);
+  }
+
+  /** Sends every known agent back to their own desk, IDLE, with no saved
+   * task -- spec section 53's "Reset Office" debug control. */
   resetAll(): void {
     for (const agentId of this.records.keys()) this.apply(agentId, { type: "reset" });
   }
 
+  /** Claims a real desk for this agent from `WorkstationSystem`'s pool,
+   * or -- once all `WORKSTATION_CAPACITY` desks are taken (overflow,
+   * spec "OVERFLOW") -- sends it to the lounge instead. Never a crash,
+   * never two agents sharing one desk. */
+  private claimDesk(agentId: string): DestinationId {
+    const workstation = workstationSystem.claim(agentId);
+    return (workstation?.deskId as DestinationId | undefined) ?? "lounge";
+  }
+
   apply(agentId: string, event: AgentEvent): void {
-    const record = this.records.get(agentId);
-    const def = agentDefinition(agentId);
-    if (!record || !def) return;
+    this.ensureAgent(agentId);
+    const record = this.records.get(agentId)!;
 
     const prev = record.runtime;
     let state: AgentState = prev.state;
@@ -148,8 +176,7 @@ export class AgentStateMachine {
         meetingRoomSystem.release(agentId);
         sofaSystem.release(agentId);
         bedSystem.release(agentId);
-        workstationSystem.claim(agentId);
-        destination = def.homeDesk;
+        destination = this.claimDesk(agentId);
         break;
       }
       case "meeting_called": {
@@ -162,8 +189,7 @@ export class AgentStateMachine {
       }
       case "meeting_ended": {
         meetingRoomSystem.release(agentId);
-        workstationSystem.claim(agentId);
-        destination = def.homeDesk;
+        destination = this.claimDesk(agentId);
         if (record.savedTask) {
           state = CATEGORY_STATE[record.savedTask.category];
           taskId = record.savedTask.taskId;
@@ -227,8 +253,7 @@ export class AgentStateMachine {
       case "provider_recovered": {
         sofaSystem.release(agentId);
         bedSystem.release(agentId);
-        workstationSystem.claim(agentId);
-        destination = def.homeDesk;
+        destination = this.claimDesk(agentId);
         if (record.savedTask) {
           state = CATEGORY_STATE[record.savedTask.category];
           taskId = record.savedTask.taskId;
@@ -255,9 +280,8 @@ export class AgentStateMachine {
         meetingRoomSystem.release(agentId);
         sofaSystem.release(agentId);
         bedSystem.release(agentId);
-        workstationSystem.claim(agentId);
         state = "IDLE";
-        destination = def.homeDesk;
+        destination = this.claimDesk(agentId);
         taskId = null;
         taskTitle = null;
         detail = null;

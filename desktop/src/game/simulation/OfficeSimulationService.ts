@@ -1,40 +1,54 @@
 import { agentStateMachine, type AgentStateMachine } from "@/game/agents/AgentStateMachine";
-import { AGENT_DEFINITIONS } from "@/game/agents/appearancePresets";
 
 /**
  * Spec section 25/51/54: a debug-only service that drives the *same*
- * `AgentStateMachine` real Orchestrator events will drive in Stage 3 --
- * it never bypasses the state machine, never touches sprites/positions
- * directly, and is not reachable from any production code path (only
- * from `OfficePage`'s Developer Mode panel). Swapping this out for a
- * real event source in Stage 3 changes zero lines downstream of
- * `AgentStateMachine`.
+ * `AgentStateMachine` real domain events drive -- it never bypasses the
+ * state machine, never touches sprites/positions directly, and is not
+ * reachable from any production code path (only from `OfficePage`'s
+ * Developer Mode panel; AgentMash V2 Phase 4's brief explicitly still
+ * allows fixtures there, see docs/agentmash-v2-phase4.md).
+ *
+ * Phase 4 made this roster-agnostic: it used to target 4 hardcoded
+ * character ids that no longer exist as a fixed concept -- it now acts
+ * on whichever real agent ids `OfficeDomainAdapter` has already
+ * registered for the currently-selected project, so the debug panel
+ * stays useful no matter which real agents are on screen.
  */
-const ALL_AGENT_IDS = AGENT_DEFINITIONS.map((a) => a.id);
 const SHORT_COOLDOWN_MS = 60_000; // below the default sleep threshold -> sofa
 const LONG_COOLDOWN_MS = 10 * 60_000; // above it -> bed
+
+const WORKDAY_TASKS: { title: string; category: "planning" | "designing" | "coding"; provider?: string }[] = [
+  { title: "Planejar sprint", category: "planning" },
+  { title: "Design Agent Settings", category: "designing", provider: "gemini" },
+  { title: "Implement Provider Screen", category: "coding", provider: "codex_cli" },
+  { title: "Build ProviderManager", category: "coding", provider: "claude_code_cli" },
+];
 
 export class OfficeSimulationService {
   constructor(private readonly sm: AgentStateMachine = agentStateMachine) {}
 
-  /** Scenario A -- Workday: every agent gets a real task and walks to
-   * their desk to start it. */
+  private currentAgentIds(): string[] {
+    return this.sm.all().map((r) => r.id);
+  }
+
+  /** Scenario A -- Workday: every currently-known agent (up to 4 distinct
+   * task shapes) gets a real task and walks to their desk to start it. */
   startWorkday(): void {
-    this.sm.apply("agent_gemini_ceo", { type: "task_assigned", taskId: "sim-plan-1", title: "Planejar sprint", category: "planning" });
-    this.sm.apply("agent_gemini_designer", { type: "task_assigned", taskId: "sim-design-1", title: "Design Agent Settings", category: "designing", provider: "gemini" });
-    this.sm.apply("agent_codex", { type: "task_assigned", taskId: "sim-fe-1", title: "Implement Provider Screen", category: "coding", provider: "codex_cli" });
-    this.sm.apply("agent_claude_code", { type: "task_assigned", taskId: "sim-be-1", title: "Build ProviderManager", category: "coding", provider: "claude_code_cli" });
+    this.currentAgentIds().forEach((id, i) => {
+      const task = WORKDAY_TASKS[i % WORKDAY_TASKS.length];
+      this.sm.apply(id, { type: "task_assigned", taskId: `sim-${i}`, ...task });
+    });
   }
 
   /** Scenario B -- Planning Meeting: everyone walks to the Meeting Room,
    * sits, and (via `endMeeting`) walks back to resume whatever they were
    * doing. */
   startPlanningMeeting(): void {
-    for (const id of ALL_AGENT_IDS) this.sm.apply(id, { type: "meeting_called" });
+    for (const id of this.currentAgentIds()) this.sm.apply(id, { type: "meeting_called" });
   }
 
   endMeeting(): void {
-    for (const id of ALL_AGENT_IDS) this.sm.apply(id, { type: "meeting_ended" });
+    for (const id of this.currentAgentIds()) this.sm.apply(id, { type: "meeting_ended" });
   }
 
   /** Scenario C/D -- Rate Limit / Long Cooldown: `cooldownMs` decides

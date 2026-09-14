@@ -22,6 +22,17 @@ class BridgeCommand(str, Enum):
     PROJECT_DELETE = "project.delete"
 
     AGENT_LIST = "agent.list"
+    AGENT_CREATE = "agent.create"
+    AGENT_UPDATE = "agent.update"
+
+    TEAM_CREATE = "team.create"
+    TEAM_UPDATE = "team.update"
+    TEAM_DELETE = "team.delete"
+    TEAM_LIST = "team.list"
+    TEAM_ASSIGN_AGENT = "team.assign_agent"
+    TEAM_REMOVE_AGENT = "team.remove_agent"
+
+    SESSION_LIST = "session.list"
 
     TASK_CREATE = "task.create"
     TASK_GET = "task.get"

@@ -3,8 +3,21 @@
 Documenta o motor 2D real por trás da tela Office: tilemap Tiled, grid de
 navegação, colisão, A*, câmera, e (desde o Estágio 2) o sistema de
 agentes autônomos que substituiu o Owner controlável pelo usuário. A
-integração com dados reais do backend orquestrador (agentes registrados,
-task board) está em [VIRTUAL_OFFICE.md](VIRTUAL_OFFICE.md).
+integração com dados reais do backend orquestrador está agora em
+**[docs/agentmash-v2-phase4.md](docs/agentmash-v2-phase4.md)**
+(`VIRTUAL_OFFICE.md` documenta a integração antiga, Estágio 3, já
+superada).
+
+> **Nota (AgentMash V2, Phase 4)**: o motor descrito abaixo continua real
+> e em produção sem mudanças de arquitetura visual -- mas o roster de
+> personagens deixou de ser os "quatro agentes nomeados" fixos citados
+> logo abaixo. `AGENT_DEFINITIONS`/`agentDefinition()` (o array estático)
+> foram removidos; `buildAgentDefinition()` (`appearancePresets.ts`)
+> constrói uma definição por agente real, e o roster pode ter qualquer
+> número de personagens (limitado a `WORKSTATION_CAPACITY` = 4 mesas
+> simultâneas antes do overflow para o lounge). As 4 spritesheets em si
+> não mudaram -- continuam sendo os únicos 4 visuais reais existentes,
+> agora tratados como um pool de presets em vez de identidades fixas.
 
 **Critério de aceitação**: abrir a tela Office deve parecer uma empresa
 de IA rodando sozinha dentro de um jogo 2D 16-bit — o usuário observa e

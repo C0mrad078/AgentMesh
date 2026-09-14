@@ -1,15 +1,14 @@
 import type { RoomId } from "@/game/maps/roomTypes";
 
 /**
- * Stage 2 introduces a second, simulation-ready agent model, deliberately
- * separate from `office/types.ts` (which is documented to only ever hold
- * *real* backend-derived state). Everything here is driven by
- * `OfficeSimulationService` today and will be driven by real Orchestrator
- * events in Stage 3 (spec section 25/54/55) -- but never both at once,
- * and never invented from nothing.
+ * Stage 2 introduced this simulation-ready agent model, driven by
+ * `OfficeSimulationService` in Developer Mode. AgentMash V2 Phase 4 (see
+ * docs/agentmash-v2-phase4.md) made it real-agent-count-agnostic: what
+ * used to be a closed set of exactly 4 named characters is now driven by
+ * however many real, persisted `Agent` rows are assigned to the selected
+ * project (`game/office-domain/buildOfficeAgents.ts` builds one
+ * `AgentDefinition` per real agent) -- never invented from nothing.
  */
-
-export type AgentRole = "ceo" | "designer" | "frontend_developer" | "backend_developer";
 
 /** Every state the autonomous office understands (spec section 56). */
 export type AgentState =
@@ -68,15 +67,22 @@ export interface AvatarAppearance {
 export interface AgentDefinition {
   id: string;
   name: string;
-  role: AgentRole;
+  /** Free text (the real, persisted `Agent.role`), not a closed set --
+   * Phase 4 removed the old 4-value `AgentRole` union along with the
+   * fixed 4-character roster it existed for. */
+  role: string;
   roleLabel: string;
   /** Phaser texture key -- the spritesheet this preset baked (spec
    * section 46: layered runtime composition is deferred, documented in
    * GAME_ENGINE.md; each preset ships as one pre-composed sheet today). */
   textureKey: string;
   appearance: AvatarAppearance;
-  homeDesk: DestinationId;
-  homeRoom: RoomId;
+  /** Shown as a small secondary label under the agent's name only when
+   * the Office is viewing "All Projects" (multiple projects on screen at
+   * once) -- `null` in single-project view, where it would be redundant.
+   * Never a color/appearance change (the brief explicitly forbids
+   * recoloring a character to indicate its project). */
+  projectLabel: string | null;
 }
 
 /** What the simulation/state machine knows about one agent right now. */

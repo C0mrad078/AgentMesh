@@ -120,6 +120,54 @@ export interface Agent {
   preferred_backend: ExecutionBackendType | null;
   fallback_backend: ExecutionBackendType | null;
   memory_profile: Record<string, string>;
+  /** AgentMash V2, Phase 4: the primary signal the Office uses to decide
+   * which project an agent belongs to. Team membership (`team_ids`,
+   * below) is a secondary, orthogonal grouping. */
+  project_id: string | null;
+  /** Deliberately just `{preset: "<key>"}` -- see
+   * `game/agents/visualProfile.ts` for the finite, real preset catalog
+   * and the deterministic (never random) fallback when this is empty. */
+  visual_profile: Record<string, string>;
+  /** Real, computed server-side (`core.bridge.handlers._agent_to_dict`) --
+   * never fabricated client-side. Empty when the agent belongs to no team. */
+  team_ids: string[];
+}
+
+export interface Team {
+  id: string;
+  name: string;
+  project_id: string | null;
+  description: string;
+  created_at: string;
+  updated_at: string;
+  /** Real, computed server-side (`core.bridge.handlers._team_list`). */
+  agent_ids: string[];
+}
+
+export type SessionStatus =
+  | "created" | "starting" | "working" | "waiting" | "paused"
+  | "idle" | "blocked" | "completed" | "failed" | "interrupted" | "cancelled";
+
+export const TERMINAL_SESSION_STATUSES: readonly SessionStatus[] = [
+  "completed", "failed", "interrupted", "cancelled",
+];
+
+export interface Session {
+  id: string;
+  agent_id: string;
+  project_id: string;
+  provider_id: string;
+  backend_type: ExecutionBackendType;
+  account_id: string | null;
+  task_id: string | null;
+  worktree_id: string | null;
+  external_session_id: string | null;
+  status: SessionStatus;
+  started_at: string | null;
+  updated_at: string;
+  finished_at: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
 }
 
 export const TASK_MODES: { value: TaskMode; label: string; available: boolean }[] = [

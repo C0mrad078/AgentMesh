@@ -1,14 +1,25 @@
 # Virtual Office
 
+> **SUPERSEDIDO (AgentMash V2, Phase 4)** — a integração descrita abaixo
+> (`RealOfficeAdapter`, `realAgentMapping.ts`, `useRealOfficeSync`, o
+> mapeamento fixo de N agentes de roteamento para 4 personagens visuais
+> nomeados) foi **retirada** nesta fase e substituída por uma integração
+> orientada a domínio real (`Agent`/`Team`/`Project`/`Session`
+> persistidos), sem mapeamento fixo — ver **[docs/agentmash-v2-phase4.md](docs/agentmash-v2-phase4.md)**
+> para a arquitetura atual. Este documento permanece como registro
+> histórico do Estágio 3 (útil para entender decisões passadas), mas não
+> descreve mais o código em produção.
+
 Um escritório 2D que representa o estado **real** do Orquestrador — agentes,
 tarefas, execuções e saúde de providers — nunca uma simulação decorativa.
 Se algo aparece se movendo no escritório, é porque um evento real do
 backend disse que aquilo está acontecendo.
 
 **Este documento cobre a integração com o backend** (eventos reais, estados
-de agente, fallback, reuniões, task board). Para a fundação de jogo 2D em
-si (Phaser, Tiled, grid, colisão, pathfinding, câmera, personagens, sprites)
-ver **[GAME_ENGINE.md](GAME_ENGINE.md)**.
+de agente, fallback, reuniões, task board), como existia até o Estágio 3.
+Para a fundação de jogo 2D em si (Phaser, Tiled, grid, colisão,
+pathfinding, câmera, personagens, sprites), ainda válida, ver
+**[GAME_ENGINE.md](GAME_ENGINE.md)**.
 
 ## Estágio 3: o Simulation Mode deixou de ser a fonte padrão
 

@@ -14,6 +14,7 @@ import type {
   ConnectionTestResult,
   ContextSuggestion,
   Execution,
+  ExecutionBackendType,
   ExecutionEventRecord,
   ExecutionStep,
   ExecutionUsageSummary,
@@ -34,8 +35,10 @@ import type {
   ProviderName,
   ReflectionRecord,
   RoutingDecisionRecord,
+  Session,
   Task,
   TaskMode,
+  Team,
   ToolCallRecord,
 } from "@/types";
 
@@ -56,6 +59,48 @@ export const projectsApi = {
 
 export const agentsApi = {
   list: () => invokeBridge<Agent[]>("agent.list"),
+  create: (input: {
+    name: string;
+    role?: string;
+    description?: string;
+    provider?: string;
+    preferred_backend?: ExecutionBackendType | null;
+    fallback_backend?: ExecutionBackendType | null;
+    project_id?: string | null;
+    visual_profile?: Record<string, string>;
+  }) => invokeBridge<Agent>("agent.create", input),
+  update: (
+    agent_id: string,
+    input: Partial<{
+      name: string;
+      role: string;
+      description: string;
+      provider: string;
+      preferred_backend: ExecutionBackendType | null;
+      fallback_backend: ExecutionBackendType | null;
+      project_id: string | null;
+      active: boolean;
+      visual_profile: Record<string, string>;
+    }>,
+  ) => invokeBridge<Agent>("agent.update", { agent_id, ...input }),
+};
+
+export const teamsApi = {
+  create: (input: { name: string; project_id?: string | null; description?: string }) =>
+    invokeBridge<Team>("team.create", input),
+  update: (team_id: string, input: Partial<{ name: string; project_id: string | null; description: string }>) =>
+    invokeBridge<Team>("team.update", { team_id, ...input }),
+  delete: (team_id: string) => invokeBridge<{ deleted: boolean }>("team.delete", { team_id }),
+  list: (project_id?: string) => invokeBridge<Team[]>("team.list", project_id ? { project_id } : {}),
+  assignAgent: (team_id: string, agent_id: string) =>
+    invokeBridge<{ assigned: boolean }>("team.assign_agent", { team_id, agent_id }),
+  removeAgent: (team_id: string, agent_id: string) =>
+    invokeBridge<{ assigned: boolean }>("team.remove_agent", { team_id, agent_id }),
+};
+
+export const sessionsApi = {
+  list: (filter: { agent_id?: string; project_id?: string } = {}) =>
+    invokeBridge<Session[]>("session.list", filter),
 };
 
 export const tasksApi = {

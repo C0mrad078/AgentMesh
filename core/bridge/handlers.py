@@ -13,6 +13,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+from core.agents.models import AgentCreate, AgentUpdate
 from core.bridge.context import BridgeContext
 from core.database.backup import create_backup, list_backups, restore_backup
 from core.learning.prompt_optimizer import PromptProposal
@@ -27,6 +28,7 @@ from core.providers.credentials import (
 )
 from core.security.allowlist import ALL_COMMANDS, BridgeCommand
 from core.tasks.models import TaskCreate, TaskStatus
+from core.teams.models import TeamCreate, TeamUpdate
 from core.tools.filesystem_tool import FilesystemTool
 from core.tools.git_tool import GitTool
 from core.utils.errors import (
@@ -112,10 +114,103 @@ async def _project_delete(params: dict[str, Any], ctx: BridgeContext) -> dict[st
 # --- agents -----------------------------------------------------------------
 
 
+async def _agent_to_dict(agent, ctx: BridgeContext) -> dict[str, Any]:
+    # AgentMash V2, Phase 4: `team_ids` is real, computed data (never
+    # fabricated) -- the Office/Team page need "which team is this agent
+    # in" readily available without a second round-trip per agent.
+    data = agent.model_dump(mode="json")
+    data["team_ids"] = await ctx.teams_repo.list_team_ids_for_agent(agent.id)
+    return data
+
+
 @handler(BridgeCommand.AGENT_LIST)
 async def _agent_list(_params: dict[str, Any], ctx: BridgeContext) -> list[Any]:
     agents = await ctx.agents_repo.list(only_active=False)
-    return [a.model_dump(mode="json") for a in agents]
+    return [await _agent_to_dict(a, ctx) for a in agents]
+
+
+@handler(BridgeCommand.AGENT_CREATE)
+async def _agent_create(params: dict[str, Any], ctx: BridgeContext) -> dict[str, Any]:
+    data = AgentCreate.model_validate(params)
+    agent = await ctx.agents_repo.create(data)
+    return await _agent_to_dict(agent, ctx)
+
+
+@handler(BridgeCommand.AGENT_UPDATE)
+async def _agent_update(params: dict[str, Any], ctx: BridgeContext) -> dict[str, Any]:
+    agent_id = _require_str(params, "agent_id")
+    data = AgentUpdate.model_validate({k: v for k, v in params.items() if k != "agent_id"})
+    agent = await ctx.agents_repo.update(agent_id, data)
+    return await _agent_to_dict(agent, ctx)
+
+
+# --- teams --------------------------------------------------------------------
+
+
+@handler(BridgeCommand.TEAM_CREATE)
+async def _team_create(params: dict[str, Any], ctx: BridgeContext) -> dict[str, Any]:
+    data = TeamCreate.model_validate(params)
+    team = await ctx.teams_repo.create(data)
+    return team.model_dump(mode="json")
+
+
+@handler(BridgeCommand.TEAM_UPDATE)
+async def _team_update(params: dict[str, Any], ctx: BridgeContext) -> dict[str, Any]:
+    team_id = _require_str(params, "team_id")
+    data = TeamUpdate.model_validate({k: v for k, v in params.items() if k != "team_id"})
+    team = await ctx.teams_repo.update(team_id, data)
+    return team.model_dump(mode="json")
+
+
+@handler(BridgeCommand.TEAM_DELETE)
+async def _team_delete(params: dict[str, Any], ctx: BridgeContext) -> dict[str, Any]:
+    team_id = _require_str(params, "team_id")
+    await ctx.teams_repo.delete(team_id)
+    return {"deleted": True}
+
+
+@handler(BridgeCommand.TEAM_LIST)
+async def _team_list(params: dict[str, Any], ctx: BridgeContext) -> list[Any]:
+    project_id = params.get("project_id")
+    teams = await ctx.teams_repo.list(project_id=project_id if isinstance(project_id, str) else None)
+    result = []
+    for team in teams:
+        team_dict = team.model_dump(mode="json")
+        team_dict["agent_ids"] = await ctx.teams_repo.list_agent_ids(team.id)
+        result.append(team_dict)
+    return result
+
+
+@handler(BridgeCommand.TEAM_ASSIGN_AGENT)
+async def _team_assign_agent(params: dict[str, Any], ctx: BridgeContext) -> dict[str, Any]:
+    team_id = _require_str(params, "team_id")
+    agent_id = _require_str(params, "agent_id")
+    await ctx.teams_repo.add_agent(team_id, agent_id)
+    return {"team_id": team_id, "agent_id": agent_id, "assigned": True}
+
+
+@handler(BridgeCommand.TEAM_REMOVE_AGENT)
+async def _team_remove_agent(params: dict[str, Any], ctx: BridgeContext) -> dict[str, Any]:
+    team_id = _require_str(params, "team_id")
+    agent_id = _require_str(params, "agent_id")
+    await ctx.teams_repo.remove_agent(team_id, agent_id)
+    return {"team_id": team_id, "agent_id": agent_id, "assigned": False}
+
+
+# --- sessions -------------------------------------------------------------------
+
+
+@handler(BridgeCommand.SESSION_LIST)
+async def _session_list(params: dict[str, Any], ctx: BridgeContext) -> list[Any]:
+    agent_id = params.get("agent_id")
+    project_id = params.get("project_id")
+    if isinstance(agent_id, str) and agent_id:
+        sessions = await ctx.sessions_repo.list_by_agent(agent_id)
+    elif isinstance(project_id, str) and project_id:
+        sessions = await ctx.sessions_repo.list_by_project(project_id)
+    else:
+        sessions = await ctx.sessions_repo.list_active()
+    return [s.model_dump(mode="json") for s in sessions]
 
 
 # --- tasks + executions -------------------------------------------------------

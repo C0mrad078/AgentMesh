@@ -31,6 +31,12 @@ function makeAgent(id: string, name: string): Agent {
     },
     config: {},
     active: true,
+    role: "",
+    avatar: null,
+    status: "idle",
+    preferred_backend: null,
+    fallback_backend: null,
+    memory_profile: {},
   };
 }
 

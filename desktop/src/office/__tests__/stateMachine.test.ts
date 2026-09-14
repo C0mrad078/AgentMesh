@@ -15,6 +15,12 @@ function makeAgent(overrides: Partial<Agent> = {}): Agent {
     permissions: { can_read_files: true, can_write_files: true, can_run_git: true, can_run_terminal: true, max_tokens_per_call: null },
     config: {},
     active: true,
+    role: "",
+    avatar: null,
+    status: "idle",
+    preferred_backend: null,
+    fallback_backend: null,
+    memory_profile: {},
     ...overrides,
   };
 }

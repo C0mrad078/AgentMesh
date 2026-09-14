@@ -95,6 +95,13 @@ export interface AgentPermissions {
   max_tokens_per_call: number | null;
 }
 
+export type ExecutionBackendType = "subscription" | "session" | "api";
+
+/** Refactor V2, Phase 1: nothing computes this from a real session yet
+ * (Presence Engine is a later phase) -- treat as the persisted default,
+ * never as a live signal, until the Office actually reads it. */
+export type AgentStatus = "idle" | "working" | "offline";
+
 export interface Agent {
   id: string;
   name: string;
@@ -107,6 +114,12 @@ export interface Agent {
   permissions: AgentPermissions;
   config: Record<string, string>;
   active: boolean;
+  role: string;
+  avatar: string | null;
+  status: AgentStatus;
+  preferred_backend: ExecutionBackendType | null;
+  fallback_backend: ExecutionBackendType | null;
+  memory_profile: Record<string, string>;
 }
 
 export const TASK_MODES: { value: TaskMode; label: string; available: boolean }[] = [

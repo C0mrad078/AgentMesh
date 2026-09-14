@@ -2,9 +2,12 @@ import { lazy, Suspense } from "react";
 import { Loader2 } from "lucide-react";
 import { AppShell } from "@/layouts/AppShell";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { ProjectsPage } from "@/pages/ProjectsPage";
+import { TeamPage } from "@/pages/TeamPage";
 import { WorkspacePage } from "@/pages/WorkspacePage";
 import { ExecutionsPage } from "@/pages/ExecutionsPage";
-import { AgentsPage } from "@/pages/AgentsPage";
+import { MemoryPage } from "@/pages/MemoryPage";
+import { ProvidersPage } from "@/pages/ProvidersPage";
 import { SettingsPage } from "@/pages/SettingsPage";
 import { LearningPage } from "@/pages/LearningPage";
 import { useUiStore } from "@/stores/uiStore";
@@ -19,18 +22,24 @@ const OfficePage = lazy(() => import("@/pages/OfficePage").then((m) => ({ defaul
 
 const PAGES = {
   office: OfficePage,
+  projects: ProjectsPage,
+  team: TeamPage,
   workspace: WorkspacePage,
   executions: ExecutionsPage,
-  agents: AgentsPage,
+  memory: MemoryPage,
+  providers: ProvidersPage,
   settings: SettingsPage,
   learning: LearningPage,
 };
 
 const PAGE_LABELS: Record<keyof typeof PAGES, string> = {
   office: "Office",
+  projects: "Projetos",
+  team: "Equipe",
   workspace: "Tarefas",
   executions: "Execuções",
-  agents: "Agentes",
+  memory: "Memória",
+  providers: "Providers",
   settings: "Configurações",
   learning: "Aprendizado",
 };

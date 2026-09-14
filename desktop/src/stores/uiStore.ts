@@ -1,7 +1,12 @@
 import { create } from "zustand";
 import type { TaskMode } from "@/types";
 
-export type AppPage = "office" | "workspace" | "executions" | "agents" | "settings" | "learning";
+// AgentMash V2 (docs/agentmash-v2-migration.md): "agents" was renamed
+// "team" and gained real Projects/Memory/Providers destinations alongside
+// it -- "office" stays the only page the app opens to (never a dashboard).
+export type AppPage =
+  | "office" | "projects" | "team" | "workspace" | "executions"
+  | "memory" | "providers" | "learning" | "settings";
 
 interface UiState {
   activePage: AppPage;

@@ -1,7 +1,5 @@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { ProvidersSettings } from "@/components/ProvidersSettings";
-import { CliProvidersSettings } from "@/components/CliProvidersSettings";
 import { BudgetSettings } from "@/components/BudgetSettings";
 import { DataManagementSettings } from "@/components/DataManagementSettings";
 import packageJson from "../../package.json";
@@ -11,7 +9,7 @@ const PLACEHOLDER_SECTIONS = [
     value: "general",
     label: "Geral",
     description: "Preferências gerais do aplicativo.",
-    body: "Configurações gerais serão adicionadas conforme o Orquestrador evoluir (idioma, diretório de dados, etc).",
+    body: "Configurações gerais serão adicionadas conforme o AgentMash evoluir (idioma, diretório de dados, etc). Providers (API e CLI/Subscription) agora têm sua própria página na navegação principal.",
   },
   {
     value: "appearance",
@@ -30,45 +28,15 @@ const PLACEHOLDER_SECTIONS = [
 export function SettingsPage() {
   return (
     <div className="mx-auto w-full max-w-3xl">
-      <Tabs defaultValue="providers">
+      <Tabs defaultValue="general">
         <TabsList className="flex-wrap">
           <TabsTrigger value="general">Geral</TabsTrigger>
           <TabsTrigger value="appearance">Aparência</TabsTrigger>
-          <TabsTrigger value="providers">Providers</TabsTrigger>
           <TabsTrigger value="security">Segurança</TabsTrigger>
           <TabsTrigger value="executions">Execuções</TabsTrigger>
           <TabsTrigger value="data">Dados</TabsTrigger>
           <TabsTrigger value="about">Sobre</TabsTrigger>
         </TabsList>
-
-        <TabsContent value="providers" className="flex flex-col gap-4">
-          <Card>
-            <CardHeader>
-              <CardTitle>Providers (API)</CardTitle>
-              <CardDescription>
-                Configure as chaves de API do Claude, Gemini e OpenAI. O Orquestrador só usa um
-                provider automaticamente depois que ele está conectado aqui.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <ProvidersSettings />
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>Providers (CLI)</CardTitle>
-              <CardDescription>
-                Codex CLI e Claude Code CLI usam a autenticação oficial de cada ferramenta (conta
-                ChatGPT/Claude via navegador), não uma API key -- e têm acesso próprio a
-                arquivos/terminal, fora do sandbox padrão do Orquestrador.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <CliProvidersSettings />
-            </CardContent>
-          </Card>
-        </TabsContent>
 
         <TabsContent value="executions">
           <Card>

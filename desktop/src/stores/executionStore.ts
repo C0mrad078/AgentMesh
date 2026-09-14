@@ -15,6 +15,17 @@ export interface AgentProgressEntry {
   status: string;
 }
 
+/** Stage 3: real `fallback.used` events (spec section 44/45) -- the
+ * backend only ever publishes one when an agent's own provider was
+ * genuinely unavailable, never for a plain code-quality correction. Kept
+ * by `toAgentId` so the office can show "Fallback from: X" on whichever
+ * real agent picked up the work. */
+export interface FallbackRecord {
+  fromAgentId: string;
+  toAgentId: string;
+  reason: string;
+}
+
 const TERMINAL_STEP_STATUSES = new Set(["completed", "failed", "cancelled"]);
 const TERMINAL_TASK_STATUSES = new Set(["completed", "partial", "failed", "cancelled"]);
 
@@ -27,6 +38,9 @@ interface ExecutionState {
   task: Task | null;
   submitting: boolean;
   error: string | null;
+  /** Real `fallback.used` events for the active execution, keyed by the
+   * agent that picked up the work (spec section 44/45). */
+  fallbacks: Record<string, FallbackRecord>;
 
   submitTask: (input: {
     projectId: string;
@@ -36,7 +50,10 @@ interface ExecutionState {
     providerInput?: Record<string, unknown>;
   }) => Promise<void>;
   handleProgressEvent: (payload: ExecutionProgressPayload) => void;
-  handleOrchestrationEvent: (eventName: string, payload: { execution_id?: string }) => void;
+  handleOrchestrationEvent: (
+    eventName: string,
+    payload: { execution_id?: string; from_agent_id?: string; to_agent_id?: string; reason?: string },
+  ) => void;
   cancelActive: () => Promise<void>;
   reset: () => void;
   refreshTask: () => Promise<void>;
@@ -53,11 +70,12 @@ export const useExecutionStore = create<ExecutionState>((set, get) => ({
   task: null,
   submitting: false,
   error: null,
+  fallbacks: {},
 
   submitTask: async ({ projectId, title, description, mode, providerInput }) => {
     set({
       submitting: true, error: null, phases: [], agentEntries: [], costUsd: null,
-      activeExecutionId: null, task: null,
+      activeExecutionId: null, task: null, fallbacks: {},
     });
     try {
       const task = await tasksApi.create({
@@ -119,6 +137,13 @@ export const useExecutionStore = create<ExecutionState>((set, get) => ({
     if (eventName === "step.completed") {
       void get().refreshCost();
     }
+    if (eventName === "fallback.used" && payload.from_agent_id && payload.to_agent_id) {
+      const record: FallbackRecord = {
+        fromAgentId: payload.from_agent_id, toAgentId: payload.to_agent_id,
+        reason: payload.reason ?? "provider_unavailable",
+      };
+      set((state) => ({ fallbacks: { ...state.fallbacks, [record.toAgentId]: record } }));
+    }
   },
 
   cancelActive: async () => {
@@ -137,7 +162,7 @@ export const useExecutionStore = create<ExecutionState>((set, get) => ({
   reset: () =>
     set({
       activeTaskId: null, activeExecutionId: null, phases: [], agentEntries: [], costUsd: null,
-      task: null, error: null,
+      task: null, error: null, fallbacks: {},
     }),
 
   refreshTask: async () => {

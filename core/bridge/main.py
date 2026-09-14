@@ -33,7 +33,12 @@ import os
 import sys
 
 from core.bridge.context import build_context
-from core.bridge.server import BridgeServer, make_event_sink, make_orchestration_event_sink
+from core.bridge.server import (
+    BridgeServer,
+    make_event_sink,
+    make_orchestration_event_sink,
+    make_provider_health_bridge_sink,
+)
 from core.bridge.transport import StdioTransport
 from core.orchestrator.recovery import recover_interrupted_work
 from core.providers.base import ProviderAdapter
@@ -57,6 +62,7 @@ async def _async_main() -> int:
     transport = StdioTransport()
     sink = make_event_sink(transport)
     orchestration_sink = make_orchestration_event_sink(transport)
+    provider_health_sink = make_provider_health_bridge_sink(transport)
 
     provider_overrides: dict[str, ProviderAdapter] | None = None
     if os.environ.get("ORCH_ENABLE_MOCK_PROVIDER", "").lower() in ("1", "true"):
@@ -65,6 +71,7 @@ async def _async_main() -> int:
 
     context = await build_context(
         paths.db_path, event_sink=sink, orchestration_event_sink=orchestration_sink,
+        provider_health_bridge_sink=provider_health_sink,
         provider_overrides=provider_overrides, detect_cli_providers=detect_cli_providers,
     )
 

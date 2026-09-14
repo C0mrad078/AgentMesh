@@ -144,6 +144,9 @@ export interface ProviderHealthRecord {
   status: ProviderHealthStatus;
   last_error: string | null;
   consecutive_failures: number;
+  /** Stage 3: real backoff duration from the adapter that raised the
+   * rate limit, when it reported one -- never fabricated. */
+  retry_after_seconds: number | null;
 }
 
 // --- Stage 5: CLI-wrapped providers (Codex CLI, Claude Code CLI, Gemini CLI) --

@@ -12,6 +12,10 @@ multiple signals, and the highest-scoring one wins:
           + availability (provider health)
           + priority (model's configured priority)
           + structured_output bonus
+          + fallback_preference (Stage 3 -- a bonus when this candidate's
+            provider is one the *original* agent declared in its own
+            `fallback_providers`, so a reroute prefers a declared fallback
+            over an arbitrary other candidate with the same capability)
           + exploration jitter (Stage 3, low-risk only, damped as
             observations accumulate -- keeps the Router from permanently
             fixating on whichever model happened to look best early on)
@@ -64,6 +68,7 @@ class RoutingWeights:
     risk_review_bonus: float = 3.0
     learned_rule_weight: float = 2.0
     exploration_weight: float = 0.6
+    fallback_preference_bonus: float = 2.0
 
 
 @dataclass(frozen=True)
@@ -108,6 +113,7 @@ class Router:
         risk: RiskLevel = RiskLevel.LOW,
         project_id: str | None = None,
         exclude_agent_ids: frozenset[str] = frozenset(),
+        preferred_fallback_providers: frozenset[str] = frozenset(),
     ) -> RoutingDecision:
         category = step.input.get("category") if isinstance(step.input, dict) else None
         rule_adjustments: dict[str, tuple[float, str]] = {}
@@ -118,7 +124,7 @@ class Router:
 
         candidates = await self._build_candidates(
             step, risk=risk, exclude_agent_ids=exclude_agent_ids, category=category,
-            rule_adjustments=rule_adjustments,
+            rule_adjustments=rule_adjustments, preferred_fallback_providers=preferred_fallback_providers,
         )
         if not candidates:
             raise NotFoundError(
@@ -148,19 +154,20 @@ class Router:
         exclude_agent_ids: frozenset[str],
         category: str | None,
         rule_adjustments: dict[str, tuple[float, str]],
+        preferred_fallback_providers: frozenset[str],
     ) -> list[_Candidate]:
         if step.assigned_agent_id:
             explicit = self._agents.get(step.assigned_agent_id)
             pool = [explicit] if explicit else []
             return await self._score_pool(
                 pool, step, risk=risk, exclude_agent_ids=exclude_agent_ids, category=category,
-                rule_adjustments=rule_adjustments,
+                rule_adjustments=rule_adjustments, preferred_fallback_providers=preferred_fallback_providers,
             )
 
         pool = self._agents.find_by_capability(step.required_capability)
         candidates = await self._score_pool(
             pool, step, risk=risk, exclude_agent_ids=exclude_agent_ids, category=category,
-            rule_adjustments=rule_adjustments,
+            rule_adjustments=rule_adjustments, preferred_fallback_providers=preferred_fallback_providers,
         )
         if candidates:
             return candidates
@@ -173,6 +180,7 @@ class Router:
         return await self._score_pool(
             [fallback] if fallback else [], step, risk=risk, exclude_agent_ids=exclude_agent_ids,
             category=category, rule_adjustments=rule_adjustments,
+            preferred_fallback_providers=preferred_fallback_providers,
         )
 
     async def _score_pool(
@@ -184,6 +192,7 @@ class Router:
         exclude_agent_ids: frozenset[str],
         category: str | None,
         rule_adjustments: dict[str, tuple[float, str]],
+        preferred_fallback_providers: frozenset[str],
     ) -> list[_Candidate]:
         candidates: list[_Candidate] = []
         for agent in pool:
@@ -197,6 +206,7 @@ class Router:
             score, reason = await self._score(
                 agent, model, step, risk=risk, category=category,
                 rule_adjustment=rule_adjustments.get(agent.id),
+                preferred_fallback_providers=preferred_fallback_providers,
             )
             candidates.append(_Candidate(agent=agent, model=model, score=score, reason=reason))
         return candidates
@@ -220,6 +230,7 @@ class Router:
         risk: RiskLevel,
         category: str | None,
         rule_adjustment: tuple[float, str] | None,
+        preferred_fallback_providers: frozenset[str],
     ) -> tuple[float, str]:
         w = self._weights
         score = 0.0
@@ -228,6 +239,10 @@ class Router:
         if step.required_capability in model.capabilities:
             score += w.capability_match
             reasons.append(f"a etapa envolve {step.required_capability}")
+
+        if agent.provider in preferred_fallback_providers:
+            score += w.fallback_preference_bonus
+            reasons.append("provider declarado como fallback preferido")
 
         health = self._health.status_of(agent.provider)
         if health in (ProviderHealthStatus.ONLINE, ProviderHealthStatus.UNKNOWN):

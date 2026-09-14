@@ -12,8 +12,10 @@ import { describe, expect, it, vi } from "vitest";
 // canvas, the same way the genuine bug behaved. If `PhaserOffice` did not
 // defensively clear the container itself, this test would see 2 canvases.
 vi.mock("phaser", () => {
+  const fakeScene = { events: { on: vi.fn(), once: (_event: string, cb: () => void) => cb() } };
+
   class FakeGame {
-    scene = { getScene: () => ({ events: { on: vi.fn() } }) };
+    scene = { getScene: () => fakeScene };
     events = { once: (_event: string, cb: () => void) => cb() };
     loop = { sleep: vi.fn(), wake: vi.fn() };
     canvas: HTMLCanvasElement;
@@ -39,8 +41,9 @@ vi.mock("phaser", () => {
       Game: FakeGame,
       Scene: FakeScene,
       AUTO: "AUTO",
-      Scale: { FIT: "FIT", CENTER_BOTH: "CENTER_BOTH" },
+      Scale: { RESIZE: "RESIZE", FIT: "FIT", CENTER_BOTH: "CENTER_BOTH" },
       Core: { Events: { READY: "ready" } },
+      Scenes: { Events: { CREATE: "create" } },
     },
   };
 });
@@ -51,7 +54,12 @@ describe("PhaserOffice", () => {
   it("never leaves more than one canvas in the DOM through a StrictMode double-mount", () => {
     const { container } = render(
       <React.StrictMode>
-        <PhaserOffice onHoverAgent={vi.fn()} onClickAgent={vi.fn()} onInteractiveObjectClick={vi.fn()} />
+        <PhaserOffice
+          onHoverAgent={vi.fn()}
+          onClickAgent={vi.fn()}
+          onTaskBoardClick={vi.fn()}
+          onSummaryChange={vi.fn()}
+        />
       </React.StrictMode>,
     );
 

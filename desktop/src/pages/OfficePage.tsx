@@ -1,42 +1,39 @@
-import { useMemo, useRef, useState } from "react";
-import { Minus, Plus, Maximize, LocateFixed, RotateCcw } from "lucide-react";
+import { useRef, useState } from "react";
+import { Bug, Minus, Plus, Maximize, LocateFixed, RotateCcw, Wrench } from "lucide-react";
 import { PhaserOffice, type PhaserOfficeHandle } from "@/components/PhaserOffice";
 import { AgentDetailPanel } from "@/components/AgentDetailPanel";
-import { OfficeTaskBoard } from "@/components/OfficeTaskBoard";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
-import { useOfficeStore } from "@/stores/officeStore";
-import { useUiStore, type AppPage } from "@/stores/uiStore";
-import { roomLabel } from "@/office/map";
+import { useUiStore } from "@/stores/uiStore";
+import type { AgentInspectInfo, OfficeSummary } from "@/game/scenes/OfficeScene";
+import { officeSimulationService } from "@/game/simulation/OfficeSimulationService";
 
-const WORKING_STATES = new Set(["WORKING", "TESTING", "REVIEWING", "PLANNING", "MEETING"]);
-const WAITING_STATES = new Set(["WAITING", "BLOCKED", "RATE_LIMITED", "RESTING"]);
+const EMPTY_SUMMARY: OfficeSummary = { working: 0, meeting: 0, resting: 0, sleeping: 0, waiting: 0, error: 0, idle: 0 };
 
-// Real navigation only -- clicking the in-canvas Task Board object opens
-// the app's actual Tasks page, never a fake in-canvas panel duplicating
-// data (spec section 43/48).
-const OBJECT_DESTINATIONS: Record<string, AppPage> = {
-  task_board: "workspace",
-};
-
+/**
+ * Fullscreen, observer-only view of the autonomous office (spec section
+ * 30/50): the user commands the camera and, in Developer Mode, the
+ * simulation debug controls -- never a character. Clicking/hovering an
+ * agent only opens read-only info (spec section 32/34/35).
+ */
 export function OfficePage() {
-  const agents = useOfficeStore((s) => s.agents);
-  const error = useOfficeStore((s) => s.error);
   const setActivePage = useUiStore((s) => s.setActivePage);
-  const [hoveredAgentId, setHoveredAgentId] = useState<string | null>(null);
-  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+  const [summary, setSummary] = useState<OfficeSummary>(EMPTY_SUMMARY);
+  const [hoveredAgent, setHoveredAgent] = useState<AgentInspectInfo | null>(null);
+  const [selectedAgent, setSelectedAgent] = useState<AgentInspectInfo | null>(null);
   const [followingAgentId, setFollowingAgentId] = useState<string | null>(null);
+  const [devMode, setDevMode] = useState(false);
   const phaserRef = useRef<PhaserOfficeHandle>(null);
 
-  const stats = useMemo(() => {
-    const values = Object.values(agents);
-    const online = values.filter((a) => a.state !== "OFFLINE").length;
-    const working = values.filter((a) => WORKING_STATES.has(a.state)).length;
-    const waiting = values.filter((a) => WAITING_STATES.has(a.state)).length;
-    return { online, working, waiting, total: values.length };
-  }, [agents]);
+  function refreshSelected() {
+    if (!selectedAgent) return;
+    const updated = phaserRef.current?.inspect(selectedAgent.id);
+    if (updated) setSelectedAgent(updated);
+  }
 
-  const hovered = hoveredAgentId ? agents[hoveredAgentId] : null;
+  function handleSummaryChange(next: OfficeSummary) {
+    setSummary(next);
+    refreshSelected();
+  }
 
   function handleFollow(agentId: string) {
     phaserRef.current?.followAgent(agentId);
@@ -49,89 +46,113 @@ export function OfficePage() {
   }
 
   return (
-    <div className="flex h-full gap-3">
-      <div className="flex flex-1 flex-col gap-3">
-        <Card className="flex items-center gap-4 px-4 py-2 text-xs text-muted-foreground">
-          <span>{stats.online} agentes online</span>
-          <span>{stats.working} trabalhando</span>
-          <span>{stats.waiting} aguardando/rate limit</span>
-        </Card>
+    <div className="relative h-full w-full">
+      <PhaserOffice
+        ref={phaserRef}
+        onHoverAgent={(id) => setHoveredAgent(id ? (phaserRef.current?.inspect(id) ?? null) : null)}
+        onClickAgent={(id) => {
+          const info = phaserRef.current?.inspect(id);
+          if (info) setSelectedAgent(info);
+        }}
+        onTaskBoardClick={() => setActivePage("workspace")}
+        onSummaryChange={handleSummaryChange}
+      />
 
-        {error && (
-          <Card className="border-destructive/50 px-4 py-2 text-xs text-destructive">
-            Falha ao carregar o escritório: {error}
-          </Card>
-        )}
-
-        <div className="relative flex-1 overflow-hidden rounded-lg border border-border">
-          <PhaserOffice
-            ref={phaserRef}
-            onHoverAgent={setHoveredAgentId}
-            onClickAgent={(agentId) => {
-              setSelectedAgentId(agentId);
-              if (followingAgentId) handleFollow(agentId);
-            }}
-            onInteractiveObjectClick={(objectId) => {
-              const page = OBJECT_DESTINATIONS[objectId];
-              if (page) setActivePage(page);
-            }}
-          />
-
-          <div className="absolute right-3 top-3 flex flex-col gap-1 rounded-md border border-border bg-card/90 p-1 shadow-lg backdrop-blur">
-            <Button size="icon" variant="ghost" className="size-7" aria-label="Aumentar zoom" onClick={() => phaserRef.current?.zoomIn()}>
-              <Plus className="size-4" />
-            </Button>
-            <Button size="icon" variant="ghost" className="size-7" aria-label="Diminuir zoom" onClick={() => phaserRef.current?.zoomOut()}>
-              <Minus className="size-4" />
-            </Button>
-            <Button size="icon" variant="ghost" className="size-7" aria-label="Ajustar à tela" onClick={() => phaserRef.current?.fit()}>
-              <Maximize className="size-4" />
-            </Button>
-            <Button
-              size="icon"
-              variant="ghost"
-              className="size-7"
-              aria-label="Redefinir câmera"
-              onClick={() => {
-                phaserRef.current?.reset();
-                setFollowingAgentId(null);
-              }}
-            >
-              <RotateCcw className="size-4" />
-            </Button>
-            {followingAgentId && (
-              <Button size="icon" variant="secondary" className="size-7" aria-label="Parar de seguir" onClick={handleStopFollow}>
-                <LocateFixed className="size-4" />
-              </Button>
-            )}
-          </div>
-
-          {hovered && (
-            <div className="pointer-events-none absolute bottom-3 left-3 max-w-xs rounded-md border border-border bg-card/95 p-3 text-xs shadow-lg backdrop-blur">
-              <p className="font-semibold">{hovered.name}</p>
-              <p className="text-muted-foreground">{roomLabel(hovered.homeRoom)}</p>
-              <p className="mt-1">Status: {hovered.state}</p>
-              {hovered.statusDetail && <p className="text-muted-foreground">{hovered.statusDetail}</p>}
-              <p className="text-muted-foreground">Provider: {hovered.provider}</p>
-            </div>
-          )}
+      <div className="pointer-events-none absolute left-3 top-3">
+        <div className="pointer-events-auto flex items-center gap-3 rounded-md border border-border bg-card/85 px-3 py-1.5 text-xs text-muted-foreground shadow backdrop-blur">
+          <span>{summary.working} trabalhando</span>
+          <span>{summary.meeting} em reunião</span>
+          <span>{summary.resting} descansando</span>
+          <span>{summary.sleeping} dormindo</span>
+          {summary.waiting > 0 && <span>{summary.waiting} aguardando</span>}
+          {summary.error > 0 && <span className="text-destructive">{summary.error} com erro</span>}
         </div>
       </div>
 
-      <div className="flex w-64 flex-col">
-        <Card className="flex-1 overflow-hidden p-0">
-          <OfficeTaskBoard />
-        </Card>
+      <div className="absolute right-3 top-3 flex flex-col gap-1 rounded-md border border-border bg-card/90 p-1 shadow-lg backdrop-blur">
+        <Button size="icon" variant="ghost" className="size-7" aria-label="Aumentar zoom" onClick={() => phaserRef.current?.zoomIn()}>
+          <Plus className="size-4" />
+        </Button>
+        <Button size="icon" variant="ghost" className="size-7" aria-label="Diminuir zoom" onClick={() => phaserRef.current?.zoomOut()}>
+          <Minus className="size-4" />
+        </Button>
+        <Button size="icon" variant="ghost" className="size-7" aria-label="Ajustar à tela" onClick={() => phaserRef.current?.fit()}>
+          <Maximize className="size-4" />
+        </Button>
+        <Button
+          size="icon"
+          variant="ghost"
+          className="size-7"
+          aria-label="Redefinir câmera"
+          onClick={() => {
+            phaserRef.current?.reset();
+            setFollowingAgentId(null);
+          }}
+        >
+          <RotateCcw className="size-4" />
+        </Button>
+        {followingAgentId && (
+          <Button size="icon" variant="secondary" className="size-7" aria-label="Parar de seguir" onClick={handleStopFollow}>
+            <LocateFixed className="size-4" />
+          </Button>
+        )}
+        <Button
+          size="icon"
+          variant={devMode ? "secondary" : "ghost"}
+          className="size-7"
+          aria-label="Alternar Developer Mode"
+          onClick={() => setDevMode((v) => !v)}
+        >
+          <Wrench className="size-3.5" />
+        </Button>
+        <Button size="icon" variant="ghost" className="size-7" aria-label="Alternar modo debug (tecla `)" onClick={() => phaserRef.current?.toggleDebug()}>
+          <Bug className="size-3.5" />
+        </Button>
       </div>
 
-      {selectedAgentId && (
-        <AgentDetailPanel
-          agentId={selectedAgentId}
-          onClose={() => setSelectedAgentId(null)}
-          onFollow={() => handleFollow(selectedAgentId)}
-          following={followingAgentId === selectedAgentId}
-        />
+      {devMode && (
+        <div className="absolute bottom-3 left-3 flex max-w-[calc(100%-1.5rem)] flex-wrap gap-1.5 rounded-md border border-border bg-card/95 p-2 shadow-lg backdrop-blur">
+          <DevButton label="Start Workday" onClick={() => officeSimulationService.startWorkday()} />
+          <DevButton label="Start Planning Meeting" onClick={() => officeSimulationService.startPlanningMeeting()} />
+          <DevButton label="End Meeting" onClick={() => officeSimulationService.endMeeting()} />
+          <DevButton label="Rate Limit Codex" onClick={() => officeSimulationService.rateLimitShort("agent_codex", "codex_cli")} />
+          <DevButton label="Long Cooldown Claude" onClick={() => officeSimulationService.rateLimitLong("agent_claude_code", "claude_code_cli")} />
+          <DevButton label="Recover Codex" onClick={() => officeSimulationService.recover("agent_codex")} />
+          <DevButton label="Recover Claude" onClick={() => officeSimulationService.recover("agent_claude_code")} />
+          <DevButton label="Send to Testing" onClick={() => officeSimulationService.sendToTesting("agent_claude_code")} />
+          <DevButton label="Trigger Error" onClick={() => officeSimulationService.triggerError("agent_codex", "Falha simulada")} />
+          <DevButton label="Complete Task" onClick={() => officeSimulationService.completeTask("agent_codex")} />
+          <DevButton label="Reset Office" onClick={() => officeSimulationService.resetOffice()} />
+        </div>
+      )}
+
+      {hoveredAgent && !selectedAgent && (
+        <div className="pointer-events-none absolute bottom-3 right-3 max-w-xs rounded-md border border-border bg-card/95 p-3 text-xs shadow-lg backdrop-blur">
+          <p className="font-semibold">{hoveredAgent.name}</p>
+          <p className="text-muted-foreground">{hoveredAgent.roleLabel}</p>
+          <p className="mt-1">Status: {hoveredAgent.state}</p>
+          {hoveredAgent.taskTitle && <p className="text-muted-foreground">{hoveredAgent.taskTitle}</p>}
+        </div>
+      )}
+
+      {selectedAgent && (
+        <div className="absolute right-3 top-16">
+          <AgentDetailPanel
+            agent={selectedAgent}
+            onClose={() => setSelectedAgent(null)}
+            onFollow={() => handleFollow(selectedAgent.id)}
+            following={followingAgentId === selectedAgent.id}
+          />
+        </div>
       )}
     </div>
+  );
+}
+
+function DevButton({ label, onClick }: { label: string; onClick: () => void }) {
+  return (
+    <Button size="sm" variant="outline" className="h-7 text-xs" onClick={onClick}>
+      {label}
+    </Button>
   );
 }

@@ -32,6 +32,12 @@ class ProviderHealthSnapshot:
     status: ProviderHealthStatus
     last_error: str | None
     consecutive_failures: int
+    # Real backoff data from the adapter that raised `ProviderRateLimitError`
+    # (Stage 3, spec section 31/36) -- `None` when the provider didn't
+    # report a duration, or when the current status isn't RATE_LIMITED at
+    # all (kept so a consumer never has to distinguish "no error" from "no
+    # timing info" by any means other than `status`).
+    retry_after_seconds: float | None = None
 
 
 class ProviderHealthMonitor:
@@ -39,6 +45,7 @@ class ProviderHealthMonitor:
         self._circuit_breaker = circuit_breaker or CircuitBreaker()
         self._explicit_status: dict[str, ProviderHealthStatus] = {}
         self._last_error: dict[str, str | None] = {}
+        self._retry_after: dict[str, float | None] = {}
         self._on_change: list = []
 
     @property
@@ -56,6 +63,7 @@ class ProviderHealthMonitor:
         self._circuit_breaker.record_success(provider)
         self._explicit_status[provider] = ProviderHealthStatus.ONLINE
         self._last_error[provider] = None
+        self._retry_after[provider] = None
         await self._notify(provider)
 
     async def report_failure(self, provider: str, error: ProviderError) -> None:
@@ -63,12 +71,16 @@ class ProviderHealthMonitor:
 
         if isinstance(error, ProviderRateLimitError):
             self._explicit_status[provider] = ProviderHealthStatus.RATE_LIMITED
+            self._retry_after[provider] = error.retry_after_seconds
         elif isinstance(error, ProviderAuthenticationError):
             self._explicit_status[provider] = ProviderHealthStatus.UNAVAILABLE
+            self._retry_after[provider] = None
         elif isinstance(error, (ProviderTimeoutError, ProviderUnavailableError)):
             self._explicit_status[provider] = ProviderHealthStatus.DEGRADED
+            self._retry_after[provider] = None
         else:
             self._explicit_status[provider] = ProviderHealthStatus.DEGRADED
+            self._retry_after[provider] = None
 
         self._last_error[provider] = error.message
         await self._notify(provider)
@@ -87,6 +99,7 @@ class ProviderHealthMonitor:
             status=self.status_of(provider),
             last_error=self._last_error.get(provider),
             consecutive_failures=self._circuit_breaker.consecutive_failures_of(provider),
+            retry_after_seconds=self._retry_after.get(provider),
         )
 
     def snapshot_all(self, providers: list[str]) -> list[ProviderHealthSnapshot]:

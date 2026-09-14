@@ -27,6 +27,8 @@ from core.bridge.protocol import (
 from core.bridge.transport import StdioTransport
 from core.orchestrator.event_bus import OrchestrationEvent
 from core.orchestrator.events import ExecutionEvent
+from core.providers.base import ProviderHealthStatus
+from core.providers.health import ProviderHealthSnapshot
 from core.utils.errors import UnauthorizedError
 from core.utils.logging import get_logger, log_event
 
@@ -77,6 +79,55 @@ def make_orchestration_event_sink(transport: StdioTransport):
             },
         )
         await transport.write_line(message.model_dump_json())
+
+    return sink
+
+
+_UNHEALTHY_STATUSES = frozenset({
+    ProviderHealthStatus.RATE_LIMITED, ProviderHealthStatus.DEGRADED, ProviderHealthStatus.UNAVAILABLE,
+})
+
+
+def make_provider_health_bridge_sink(transport: StdioTransport):
+    """Stage 3, spec section 20/31/41: the real gap this stage exists to
+    close -- until now, `ProviderHealthMonitor.on_change` only fed the
+    `provider_health` DB table (`make_provider_health_sink`); the Virtual
+    Office had no way to learn a provider went into cooldown except a 15s
+    poll. This mirrors `ProviderHealthMonitor.on_change`'s own
+    `(provider, snapshot)` shape and pushes exactly two real, named events:
+    `provider.rate_limited` (any unhealthy status, carrying `retryAfter`
+    seconds when the adapter reported one -- never fabricated) and
+    `provider.recovered` (transition back to healthy). Everything else
+    (DEGRADED vs. RATE_LIMITED vs. UNAVAILABLE nuance, exact error text) is
+    still in the payload for the UI to read, but the *office* only ever
+    needs "should this agent's body still be at its desk or not".
+    """
+    previously_unhealthy: set[str] = set()
+
+    async def sink(provider: str, snapshot: ProviderHealthSnapshot) -> None:
+        is_unhealthy = snapshot.status in _UNHEALTHY_STATUSES
+        was_unhealthy = provider in previously_unhealthy
+
+        if is_unhealthy and not was_unhealthy:
+            previously_unhealthy.add(provider)
+            message = EventMessage(
+                event="provider.rate_limited",
+                payload={
+                    "providerId": provider,
+                    "status": snapshot.status.value,
+                    "retryAfter": snapshot.retry_after_seconds,
+                    "lastError": snapshot.last_error,
+                },
+            )
+            await transport.write_line(message.model_dump_json())
+        elif was_unhealthy and not is_unhealthy:
+            previously_unhealthy.discard(provider)
+            message = EventMessage(event="provider.recovered", payload={"providerId": provider})
+            await transport.write_line(message.model_dump_json())
+        # A status change between two unhealthy states (e.g. DEGRADED ->
+        # RATE_LIMITED) or two healthy ones is real but not a *transition*
+        # the office needs to act on again -- the agent is already
+        # resting/sleeping, or already working; no new event is emitted.
 
     return sink
 

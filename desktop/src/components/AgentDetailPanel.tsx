@@ -1,37 +1,34 @@
 import { LocateFixed, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { useOfficeStore } from "@/stores/officeStore";
-import { roomLabel } from "@/office/map";
-import type { VirtualAgent } from "@/office/types";
+import type { AgentInspectInfo } from "@/game/scenes/OfficeScene";
 
-const STATE_LABEL: Record<VirtualAgent["state"], string> = {
-  OFFLINE: "Offline", IDLE: "Ocioso", PLANNING: "Planejando", MOVING: "Em trânsito",
-  WORKING: "Trabalhando", TESTING: "Testando", REVIEWING: "Revisando", MEETING: "Em reunião",
-  WAITING: "Aguardando", BLOCKED: "Bloqueado", RATE_LIMITED: "Rate limit", RESTING: "Descansando",
-  ERROR: "Erro", COMPLETED: "Concluído",
+const STATE_LABEL: Record<string, string> = {
+  OFFLINE: "Offline", IDLE: "Ocioso", MOVING: "Em trânsito", PLANNING: "Planejando",
+  WORKING: "Trabalhando", CODING: "Codando", DESIGNING: "Desenhando", RESEARCHING: "Pesquisando",
+  TESTING: "Testando", REVIEWING: "Revisando", MEETING: "Em reunião", WAITING: "Aguardando",
+  BLOCKED: "Bloqueado", RATE_LIMITED: "Rate limit", COOLDOWN: "Cooldown", RESTING: "Descansando",
+  SLEEPING: "Dormindo", ERROR: "Erro", COMPLETED: "Concluído",
 };
 
+const ERROR_STATES = new Set(["ERROR", "BLOCKED"]);
+
 interface AgentDetailPanelProps {
-  agentId: string;
+  agent: AgentInspectInfo;
   onClose: () => void;
   onFollow?: () => void;
   following?: boolean;
 }
 
-export function AgentDetailPanel({ agentId, onClose, onFollow, following }: AgentDetailPanelProps) {
-  const agent = useOfficeStore((s) => s.agents[agentId]);
-  const step = useOfficeStore((s) => s.steps.find((st) => st.id === agent?.currentStepId));
-
-  if (!agent) return null;
-
+/** Spec section 32/34/35: click opens this read-only inspector -- it
+ * never lets the user command the agent, only observe it. */
+export function AgentDetailPanel({ agent, onClose, onFollow, following }: AgentDetailPanelProps) {
   return (
-    <div className="flex h-full w-80 flex-col border-l border-border bg-card">
+    <div className="flex w-72 flex-col rounded-lg border border-border bg-card/95 shadow-xl backdrop-blur">
       <div className="flex items-center justify-between border-b border-border p-3">
         <div>
           <p className="text-sm font-semibold">{agent.name}</p>
-          <p className="text-xs text-muted-foreground">{roomLabel(agent.homeRoom)}</p>
+          <p className="text-xs text-muted-foreground">{agent.roleLabel}</p>
         </div>
         <div className="flex items-center gap-1">
           {onFollow && (
@@ -51,65 +48,46 @@ export function AgentDetailPanel({ agentId, onClose, onFollow, following }: Agen
         </div>
       </div>
 
-      <ScrollArea className="flex-1">
-        <div className="flex flex-col gap-3 p-3 text-sm">
-          <div className="flex items-center gap-2">
-            <Badge variant={agent.state === "ERROR" ? "destructive" : "secondary"}>
-              {STATE_LABEL[agent.state]}
-            </Badge>
-          </div>
+      <div className="flex flex-col gap-2 p-3 text-sm">
+        <Badge variant={ERROR_STATES.has(agent.state) ? "destructive" : "secondary"} className="w-fit">
+          {STATE_LABEL[agent.state] ?? agent.state}
+        </Badge>
 
-          <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 text-xs">
-            <dt className="text-muted-foreground">Provider</dt>
-            <dd>{agent.provider}</dd>
-            <dt className="text-muted-foreground">Model</dt>
-            <dd>{agent.model}</dd>
-            {agent.currentTaskId && (
-              <>
-                <dt className="text-muted-foreground">Tarefa</dt>
-                <dd className="truncate">{agent.currentTaskId}</dd>
-              </>
-            )}
-            {agent.statusDetail && (
-              <>
-                <dt className="text-muted-foreground">Atividade</dt>
-                <dd>{agent.statusDetail}</dd>
-              </>
-            )}
-            {agent.lastActivityAt && (
-              <>
-                <dt className="text-muted-foreground">Desde</dt>
-                <dd>{new Date(agent.lastActivityAt).toLocaleTimeString()}</dd>
-              </>
-            )}
-          </dl>
-
-          {step && (
-            <div className="flex flex-col gap-1.5 border-t border-border pt-3">
-              <p className="text-xs font-medium text-muted-foreground">Detalhes do step</p>
-              <p className="text-xs">
-                Tentativa {step.attempt} &middot; status {step.status}
-              </p>
-              {step.error && (
-                <p className="text-xs text-destructive">
-                  {typeof step.error.message === "string" ? step.error.message : JSON.stringify(step.error)}
-                </p>
-              )}
-              {step.output && Object.keys(step.output).length > 0 && (
-                <pre className="whitespace-pre-wrap break-words rounded bg-muted p-2 text-[11px]">
-                  {JSON.stringify(step.output, null, 2).slice(0, 1000)}
-                </pre>
-              )}
-            </div>
+        <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 text-xs">
+          {agent.taskTitle && (
+            <>
+              <dt className="text-muted-foreground">Tarefa</dt>
+              <dd className="truncate">{agent.taskTitle}</dd>
+            </>
           )}
-
-          {!step && (
-            <p className="border-t border-border pt-3 text-xs text-muted-foreground">
-              Sem step ativo nesta execução -- este agente está ocioso na mesa dele.
-            </p>
+          {agent.provider && (
+            <>
+              <dt className="text-muted-foreground">Provider</dt>
+              <dd>{agent.provider}</dd>
+            </>
           )}
-        </div>
-      </ScrollArea>
+          {agent.fallbackFrom && (
+            <>
+              <dt className="text-muted-foreground">Fallback</dt>
+              <dd className="truncate" title={`Fallback from: ${agent.fallbackFrom}`}>
+                Fallback from: {agent.fallbackFrom}
+              </dd>
+            </>
+          )}
+          <dt className="text-muted-foreground">Sala</dt>
+          <dd>{agent.room ?? "Corredor"}</dd>
+          {agent.progress !== null && (
+            <>
+              <dt className="text-muted-foreground">Progresso</dt>
+              <dd>{Math.round(agent.progress * 100)}%</dd>
+            </>
+          )}
+        </dl>
+
+        {agent.detail && agent.detail !== agent.taskTitle && (
+          <p className="border-t border-border pt-2 text-xs text-muted-foreground">{agent.detail}</p>
+        )}
+      </div>
     </div>
   );
 }

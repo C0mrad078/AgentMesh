@@ -17,6 +17,25 @@ async def test_rate_limit_failure_marks_rate_limited() -> None:
     assert monitor.status_of("anthropic") == ProviderHealthStatus.RATE_LIMITED
 
 
+async def test_rate_limit_failure_threads_the_real_retry_after_into_the_snapshot() -> None:
+    monitor = ProviderHealthMonitor()
+    await monitor.report_failure("anthropic", ProviderRateLimitError("slow down", retry_after_seconds=17.0))
+    assert monitor.snapshot("anthropic").retry_after_seconds == 17.0
+
+
+async def test_retry_after_is_none_when_the_adapter_never_reported_one() -> None:
+    monitor = ProviderHealthMonitor()
+    await monitor.report_failure("anthropic", ProviderRateLimitError("slow down"))
+    assert monitor.snapshot("anthropic").retry_after_seconds is None
+
+
+async def test_retry_after_is_cleared_on_recovery() -> None:
+    monitor = ProviderHealthMonitor()
+    await monitor.report_failure("anthropic", ProviderRateLimitError("slow down", retry_after_seconds=17.0))
+    await monitor.report_success("anthropic")
+    assert monitor.snapshot("anthropic").retry_after_seconds is None
+
+
 async def test_auth_failure_marks_unavailable() -> None:
     monitor = ProviderHealthMonitor()
     await monitor.report_failure("anthropic", ProviderAuthenticationError("bad key"))

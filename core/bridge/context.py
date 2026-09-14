@@ -56,16 +56,22 @@ from core.database.repositories.projects_repo import ProjectsRepository
 from core.database.repositories.prompt_evaluations_repo import PromptEvaluationsRepository
 from core.database.repositories.prompt_regression_cases_repo import PromptRegressionCasesRepository
 from core.database.repositories.prompt_versions_repo import PromptVersionsRepository
+from core.database.repositories.provider_accounts_repo import ProviderAccountsRepository
+from core.database.repositories.provider_backends_repo import ProviderBackendsRepository
 from core.database.repositories.provider_configs_repo import ProviderConfigsRepository
 from core.database.repositories.provider_health_repo import ProviderHealthRepository
+from core.database.repositories.providers_repo import ProvidersRepository
 from core.database.repositories.reflections_repo import ReflectionsRepository
 from core.database.repositories.routing_decisions_repo import RoutingDecisionsRepository
 from core.database.repositories.rule_evidence_repo import RuleEvidenceRepository
+from core.database.repositories.sessions_repo import SessionsRepository
 from core.database.repositories.settings_repo import SettingsRepository
 from core.database.repositories.tasks_repo import TasksRepository
+from core.database.repositories.teams_repo import TeamsRepository
 from core.database.repositories.tool_calls_repo import ToolCallsRepository
 from core.database.repositories.usage_metrics_repo import UsageMetricsRepository
 from core.database.repositories.user_feedback_repo import UserFeedbackRepository
+from core.database.repositories.worktrees_repo import WorktreesRepository
 from core.learning.context_optimizer import ContextOptimizer
 from core.learning.learning_engine import LearningEngine
 from core.learning.model_performance import ModelPerformanceTracker
@@ -158,6 +164,15 @@ class BridgeContext:
     learning_events_repo: LearningEventsRepository
     learning_policy_repo: LearningPolicyRepository
     context_metrics_repo: ContextMetricsRepository
+    # -- Refactor V2, Phase 1: new persisted domain model -----------------
+    # (docs/refactor-v2-plan.md §4) -- repositories only; nothing in the
+    # engine/bridge commands consumes these yet (Phase 2/3/6 wiring).
+    teams_repo: TeamsRepository
+    providers_repo: ProvidersRepository
+    provider_accounts_repo: ProviderAccountsRepository
+    provider_backends_repo: ProviderBackendsRepository
+    sessions_repo: SessionsRepository
+    worktrees_repo: WorktreesRepository
     rule_resolver: RuleResolver
     performance_tracker: ModelPerformanceTracker
     playbook_matcher: PlaybookMatcher
@@ -189,6 +204,7 @@ async def build_context(
     *,
     event_sink: EventSink | None = None,
     orchestration_event_sink=None,
+    provider_health_bridge_sink=None,
     provider_overrides: dict[str, ProviderAdapter] | None = None,
     secret_store: SecretStore | None = None,
     detect_cli_providers: bool = False,
@@ -246,6 +262,13 @@ async def build_context(
     learning_policy_repo = LearningPolicyRepository(db)
     context_metrics_repo = ContextMetricsRepository(db)
 
+    teams_repo = TeamsRepository(db)
+    providers_repo = ProvidersRepository(db)
+    provider_accounts_repo = ProviderAccountsRepository(db)
+    provider_backends_repo = ProviderBackendsRepository(db)
+    sessions_repo = SessionsRepository(db)
+    worktrees_repo = WorktreesRepository(db)
+
     for target, name, description in (
         ("planner", "planner_produces_valid_dependencies", "O Planner deve gerar dependências válidas entre steps."),
         ("router", "router_never_selects_offline_provider", "O Router nunca deve selecionar um provider não registrado."),
@@ -288,6 +311,11 @@ async def build_context(
 
     health_monitor = ProviderHealthMonitor(CircuitBreaker())
     health_monitor.on_change(make_provider_health_sink(provider_health_repo))
+    if provider_health_bridge_sink is not None:
+        # Stage 3: the Virtual Office's only way to learn a provider went
+        # into rate limit/cooldown or recovered, in real time (spec section
+        # 20/31/41) -- see `core.bridge.server.make_provider_health_bridge_sink`.
+        health_monitor.on_change(provider_health_bridge_sink)
 
     concurrency = ConcurrencyManager()
     budget = BudgetManager(await budgets_repo.get_global_limits(), usage_metrics_repo)
@@ -339,6 +367,7 @@ async def build_context(
         provider_pool, planner, router, step_executor, judge, verifier, aggregator, context_builder,
         budget, event_bus, phase_event_sink=event_sink or noop_sink,
         context_metrics_repo=context_metrics_repo, post_execution_pipeline=post_execution_pipeline,
+        health_monitor=health_monitor,
     )
 
     return BridgeContext(
@@ -382,6 +411,12 @@ async def build_context(
         learning_events_repo=learning_events_repo,
         learning_policy_repo=learning_policy_repo,
         context_metrics_repo=context_metrics_repo,
+        teams_repo=teams_repo,
+        providers_repo=providers_repo,
+        provider_accounts_repo=provider_accounts_repo,
+        provider_backends_repo=provider_backends_repo,
+        sessions_repo=sessions_repo,
+        worktrees_repo=worktrees_repo,
         rule_resolver=rule_resolver,
         performance_tracker=performance_tracker,
         playbook_matcher=playbook_matcher,

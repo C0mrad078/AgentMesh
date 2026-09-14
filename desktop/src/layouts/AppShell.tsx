@@ -15,6 +15,11 @@ const PAGE_TITLES: Record<AppPage, string> = {
 
 export function AppShell({ children }: { children: ReactNode }) {
   const activePage = useUiStore((s) => s.activePage);
+  // The Office screen is a real 2D game world -- it gets the entire main
+  // content area edge-to-edge, no padding/rounded trim eating into the
+  // canvas (spec section 3). Every other page keeps the normal padded
+  // layout.
+  const isOffice = activePage === "office";
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-background text-foreground">
@@ -24,7 +29,9 @@ export function AppShell({ children }: { children: ReactNode }) {
           <h1 className="text-sm font-semibold">{PAGE_TITLES[activePage]}</h1>
           <ConnectionBadge />
         </header>
-        <main className="flex min-h-0 flex-1 flex-col overflow-auto p-4">{children}</main>
+        <main className={isOffice ? "relative min-h-0 flex-1" : "flex min-h-0 flex-1 flex-col overflow-auto p-4"}>
+          {children}
+        </main>
       </div>
       <NewProjectDialog />
     </div>

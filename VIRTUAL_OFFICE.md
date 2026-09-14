@@ -5,61 +5,144 @@ tarefas, execuções e saúde de providers — nunca uma simulação decorativa.
 Se algo aparece se movendo no escritório, é porque um evento real do
 backend disse que aquilo está acontecendo.
 
-## Princípio fundamental
+**Este documento cobre a integração com o backend** (eventos reais, estados
+de agente, fallback, reuniões, task board). Para a fundação de jogo 2D em
+si (Phaser, Tiled, grid, colisão, pathfinding, câmera, personagens, sprites)
+ver **[GAME_ENGINE.md](GAME_ENGINE.md)**.
+
+## Estágio 3: o Simulation Mode deixou de ser a fonte padrão
+
+A partir deste estágio, `OfficeSimulationService` (Estágio 2) só roda a
+partir do painel **Developer Mode** (ícone de chave inglesa na tela
+Office) — nunca por padrão. A fonte real e padrão é:
 
 ```
-Orchestrator Engine (Python)
-        ↓ eventos reais via bridge (orchestrator://event)
-executionStore (já existia, Estágio 2)
-        ↓ mudanças de estado observadas
-useOfficeSync (hook)
-        ↓ dispara refresh()
-officeStore (Zustand)
-        ↓ busca agents/steps/providerHealth reais + deriva estado
-deriveOfficeSnapshot (puro, testável sem React/Phaser)
+Codex CLI / Claude Code CLI / Gemini (adapters reais)
         ↓
-OfficeController
-        ↓ comandos imperativos (nunca o inverso)
-OfficeScene (Phaser)
+ProviderPool + ProviderHealthMonitor (core/providers/)
+        ↓
+Router + ExecutionEngine (core/orchestrator/)
+        ↓ publica em
+EventBus (core/orchestrator/event_bus.py) -- tipado, único, real
+        ↓
+Bridge sinks (core/bridge/server.py) -- já existiam desde o Estágio 1
+        ↓ stdio JSON-line "event"
+Rust bridge manager (desktop/src-tauri/src/bridge/manager.rs)
+        ↓ Tauri emit
+canal "orchestrator://event" (frontend)
+        ↓
+executionStore (já existia -- Estágios 1/2)
+        ↓ dispara re-sync (não polling)
+useRealOfficeSync -> RealOfficeAdapter (game/agents/)
+        ↓ traduz para AgentEvent
+AgentStateMachine (Estágio 2, inalterada)
+        ↓
+Agent (Phaser) -- game/entities/
 ```
 
-Nunca existe um caminho `Virtual Office → simulação falsa`. Não há
-`setTimeout` fingindo atividade em nenhum lugar deste módulo.
+Achado real da auditoria inicial deste estágio: o caminho Python → Rust →
+Tauri → frontend **já existia por completo** desde o Estágio 1 (usado pelo
+board de progresso da execução) — nada novo foi necessário nessa ponte. O
+que realmente faltava, e foi construído agora:
 
-## Por que Phaser 3, e como ele se encaixa
+1. **`provider.rate_limited` / `provider.recovered` nunca chegavam ao
+   frontend** -- `ProviderHealthMonitor.on_change` só alimentava a tabela
+   `provider_health`. Novo sink real:
+   `core.bridge.server.make_provider_health_bridge_sink`, testado em
+   `tests/python/test_provider_health_bridge_sink.py`.
+2. **`retry_after_seconds` de um `ProviderRateLimitError` real era
+   descartado** -- agora persiste em `ProviderHealthSnapshot` e viaja até
+   o `provider.rate_limited` (chave `retryAfter`) e até `provider.health`
+   (chave `retry_after_seconds`), nunca inventado quando o adapter não
+   informa (`tests/python/test_provider_health.py`).
+3. **Fallback entre agentes nunca acontecia de verdade** --
+   `EventType.FALLBACK_USED` existia no enum mas nunca era publicado.
+   Agora `ExecutionEngine._run_correction_round` reexecuta com um agente
+   diferente (`Router.route(..., exclude_agent_ids=...)`) *apenas* quando
+   o provider do agente anterior está genuinely indisponível -- nunca só
+   porque o código estava errado (isso continua sendo o mesmo agente
+   corrigindo o próprio trabalho, spec seção 52). Ver
+   `tests/integration/test_provider_fallback.py` (inclui o teste de
+   controle negativo: correção comum não troca de agente).
+4. **Reunião nunca era um evento nomeado** -- `MeetingManager`
+   (`core/orchestrator/meeting_manager.py`) publica
+   `meeting.created`/`meeting.started`/`meeting.completed` com
+   participantes reais e dinâmicos sempre que uma camada do DAG roda 2+
+   agentes ao mesmo tempo sob modo Debate/Consensus -- o mesmo sinal real
+   que a heurística do frontend (abaixo) já usava, agora também nomeado e
+   auditável no backend. Ver `tests/integration/test_meeting_manager.py`.
+5. **`Agent` não distinguia papel de provider** -- `preferred_provider` +
+   `fallback_providers` (spec seção 8/9), persistidos (migração
+   `0005_agent_fallback_providers.sql`), declarados de verdade para os
+   dois agentes reais autenticados nesta máquina
+   (`agent_codex_cli_developer` → fallback `claude_code_cli`;
+   `agent_claude_code_architect` → fallback `codex_cli`). O `Router`
+   também dá um bônus de pontuação (`fallback_preference_bonus`) a um
+   candidato cujo provider está na lista `fallback_providers` do agente
+   anterior durante um reroute -- não é só "qualquer outro candidato da
+   mesma capability", é o fallback *declarado* preferido sobre os demais
+   (`ExecutionEngine._run_correction_round` passa
+   `preferred_fallback_providers` ao `Router.route`). Ver
+   `tests/python/test_router.py::test_fallback_preference_bonus_*`.
 
-`desktop/src/office/scenes/OfficeScene.ts` é a única classe que sabe que
-Phaser existe. Ela expõe um contrato mínimo e imperativo
-(`ensureAgentSprite`, `moveAgentAlongPath`, `setAgentVisual`,
-`getAgentGridPosition`) consumido exclusivamente por `OfficeController`
-(`desktop/src/office/OfficeController.ts`) — nenhum outro componente React
-chama métodos do Phaser diretamente (spec original, seção 17).
+## Como o frontend traduz eventos reais em posição física
 
-`desktop/src/components/PhaserOffice.tsx` monta exatamente um
-`Phaser.Game` na montagem do componente e o destrói no unmount. Ele nunca
-re-renderiza em resposta a mudança de estado do office — em vez disso,
-assina `officeStore` de forma imperativa (`useOfficeStore.subscribe`) e
-repassa direto para o `OfficeController`. Isso é o que garante que o FPS
-do canvas nunca dependa do ciclo de render do React (seção 31/32).
+`RealOfficeAdapter` (`desktop/src/game/agents/RealOfficeAdapter.ts`) é o
+`VirtualOfficeController` do diagrama do Estágio 3. Ele **não** reimplementa
+a derivação de estado -- reutiliza `deriveOfficeSnapshot`
+(`office/stateMachine.ts`, real desde o Estágio 1, inalterada) para decidir
+o que cada *agente real* está fazendo a partir de `agents`/`steps`/
+`providerHealth`/`activeTask` reais, e só então traduz esse estado real
+para o `AgentEvent` que uma das 4 personagens visuais entende.
 
-**Code splitting real**: Phaser sozinho adiciona ~1.2MB minificados ao
-bundle. `OfficePage` é carregado via `React.lazy()` em `App.tsx` — todas
-as outras páginas continuam com o bundle original (~390KB); o custo do
-Phaser só é pago por quem realmente abre o Office.
+**Mapeamento agente real → personagem visual**
+(`game/agents/realAgentMapping.ts`, tabela fixa e auditável): os 2 agentes
+CLI reais e autenticados nesta máquina (`agent_codex_cli_developer`,
+`agent_claude_code_architect`) mapeiam para Codex/Claude Code
+respectivamente -- a identidade que essas duas personagens já tinham em
+todo o projeto. Os demais 9 agentes (mock + HTTP-API) mapeiam pelas mesmas
+convenções de papel já estabelecidas em `roleMapping.ts`. Quando dois
+agentes reais mapeiam para a mesma personagem e ambos estão ativos ao
+mesmo tempo (raro na prática -- o DAG normalmente atribui um agente por
+etapa), o estado mais "urgente" vence (ERROR > MEETING > RATE_LIMITED >
+trabalho > espera > ocioso), nunca uma condição de corrida silenciosa.
 
-## Mapa e grid
+`RealOfficeAdapter` é **stateful de propósito**: guarda o último estado
+real traduzido por personagem para escolher o `AgentEvent` certo na
+transição (`WORKING` vindo de `MEETING` → `meeting_ended`, vindo de
+`RATE_LIMITED` → `provider_recovered`, do zero → `task_assigned`) --
+nunca reemite o mesmo evento sem uma mudança real (testado em
+`RealOfficeAdapter.test.ts`, 9 casos, incluindo o bug real encontrado e
+corrigido durante a escrita dos testes: um agente que ficava `IDLE` não
+disparava `reset` nenhum e a personagem ficava presa na pose de trabalho
+para sempre).
 
-`desktop/src/office/map.ts` define um grid de 48×30 células (32px cada).
-Sete salas são retângulos fixos com uma única porta cada
-(`ROOMS`), e `isWalkable(x, y)` decide colisão: paredes de sala bloqueiam,
-exceto na célula da porta; corredores fora de qualquer sala são sempre
-andáveis. `desktop/src/office/pathfinding.ts` implementa A* 4-direcional
-puro (sem dependência de Phaser/React) sobre esse grid — testado
-diretamente (`__tests__/pathfinding.test.ts`), inclusive confirmando que
-uma rota até uma sala sempre passa pela porta, nunca pela parede.
+**Curto vs. longo cooldown com dado real**: `cooldownMs` vem de
+`retry_after_seconds` (convertido para ms) quando o provider informou um;
+quando não informou, a política do próprio enunciado (seção 36) é seguida
+literalmente -- tratado como curto (sofá), nunca inventado como longo.
 
-Destinos são sempre semânticos (`moveAgent(agentId, "meeting_room")`),
-nunca coordenadas soltas — ver `destinationPoint()` em `map.ts`.
+**Reconstrução ao reabrir o app (spec seção 72/73)**: `useRealOfficeSync`
+faz uma sincronização real assim que monta, antes de qualquer evento ao
+vivo -- se um provider já estava com problema de saúde quando o app foi
+fechado (`provider_health` sobrevive no SQLite), o agente correspondente
+aparece direto no Lounge/Recovery Room, nunca de volta na mesa por engano.
+`core.orchestrator.recovery.recover_interrupted_work` (já existia) cuida
+da metade "backend": nenhuma execução trava em `running` para sempre após
+um crash -- é marcada `failed_interrupted` antes do bridge aceitar
+qualquer request, então o frontend nunca vê uma execução fantasma ainda
+"ativa" para tentar reconstruir.
+
+**Escopo deliberadamente não coberto nesta rodada** (ver relatório de
+entrega para a lista completa): o tooltip ainda não mostra "Fallback
+from: Codex" quando `FALLBACK_USED` troca o provider ativo de um agente
+(o provider *atual* já aparece corretamente via `virtual.provider`, só a
+anotação explícita do fallback não foi fiada até a UI); o frontend deriva
+`MEETING` pela mesma heurística de sempre (modo debate/consensus + 2+
+agentes rodando) em vez de consumir diretamente os novos eventos
+`meeting.*` (equivalentes na prática, já que os dois lados leem o mesmo
+sinal real); e não há uma segunda dimensão de "quem cada agente real
+está revisando" além do papel fixo.
 
 ## Mapeamento de papéis (honesto sobre suas limitações)
 
@@ -97,109 +180,87 @@ nenhum delay artificial. Regras:
 | Step `completed` | `COMPLETED` |
 | `task.mode` é `debate`/`consensus` **e** 2+ agentes rodando ao mesmo tempo | `MEETING` para todos os envolvidos, Meeting Room |
 
+Este mapa de estados agora alimenta `RealOfficeAdapter` (acima) em vez de
+`OfficeController`/círculos coloridos (Estágio 1, removido no Estágio 3
+por estar definitivamente órfão -- nada mais implementava a interface
+`SceneLike` que ele exigia desde a reescrita da `OfficeScene` no Estágio
+2). `officeStore.ts`/`useOfficeSync.ts` (Estágio 1) também foram removidos
+pelo mesmo motivo: zero consumidores restantes depois que
+`useRealOfficeSync` assumiu o papel de sincronizar com dados reais.
+
 ## Fluxo de rate limit → Lounge → retomada
 
-Não existe um evento de "rate limit" dedicado hoje no backend
-(`core.orchestrator.event_bus.EventType`), mas o sinal real já existe:
-`ProviderHealthMonitor`/`CircuitBreaker` (Estágio 2) já classificam um
-provider como `degraded`/`rate_limited`/`unavailable`, exposto via o
-comando de bridge `provider.health` que a UI de Configurações já usa.
-`officeStore` consulta esse mesmo endpoint. Quando o step em andamento de
-um agente usa um provider nesse estado, `deriveOfficeSnapshot` o coloca em
-`RATE_LIMITED` rumo à Lounge — no próximo refresh (evento real ou o poll
-leve descrito abaixo), se o provider já não estiver mais degradado, o
-agente volta a `WORKING` e o `OfficeController` o move de volta à mesa
-automaticamente, porque o `destination` derivado mudou.
-
-**Sem polling agressivo (seção 12)**: `useOfficeSync`
-(`desktop/src/hooks/useOfficeSync.ts`) nunca usa um timer para
-steps/tarefas — ele reage a mudanças reais em `executionStore` (que só
-muda em resposta a eventos reais do bridge). A saúde de provider é a única
-coisa sem evento de push próprio hoje, então é a única coisa com um poll —
-a cada 15s, e **somente enquanto uma execução está de fato ativa**; sem
-tarefa rodando, não há poll nenhum.
+`ProviderHealthMonitor` (`core/providers/health.py`) classifica um
+provider como `degraded`/`rate_limited`/`unavailable` a partir de um erro
+real (`ProviderRateLimitError`/`ProviderAuthenticationError`/etc.) e agora
+**empurra** essa mudança para o frontend em tempo real (não mais só um
+poll de 15s) via `make_provider_health_bridge_sink`. Quando o step em
+andamento de um agente usa um provider nesse estado,
+`deriveOfficeSnapshot` o coloca em `RATE_LIMITED`; `RealOfficeAdapter`
+decide sofá vs. cama pelo `retryAfter` real e, quando o provider volta,
+o mesmo agente resume exatamente a tarefa salva (`AgentStateMachine`,
+Estágio 2, inalterada).
 
 ## Reuniões (meetings)
 
-Não existe um objeto de "meeting" persistido no backend — deliberadamente,
-para não inventar um domínio novo sem necessidade. Uma reunião visual é
-derivada diretamente da estrutura real do DAG: `task.mode` sendo
-`debate`/`consensus` **e** 2 ou mais agentes com steps `running`
-simultaneamente. Isso é honesto porque só acontece quando o DAG
-genuinamente executa múltiplos agentes em paralelo sob esses modos — nunca
-fabricado para parecer mais dinâmico.
+Duplamente real agora: o backend (`MeetingManager`) publica os eventos
+nomeados e auditáveis; o frontend deriva o mesmo resultado visual da
+mesma condição real (`task.mode` `debate`/`consensus` **e** 2+ agentes
+com steps `running` simultaneamente) via `deriveOfficeSnapshot`. Nunca
+fabricado para parecer mais dinâmico -- só acontece quando o DAG
+genuinamente executa múltiplos agentes em paralelo sob esses modos.
 
 ## Task Board
 
-`desktop/src/components/OfficeTaskBoard.tsx` reflete os `ExecutionStep`s
-reais (`kind === "work"`) da execução ativa, agrupados pelos status reais
-(`pending`/`running`/`completed`/`failed`+`cancelled`+`skipped`).
-**Diferença deliberada da especificação original**: não existe uma coluna
-"Review" no board porque não existe um status `ExecutionStep` distinto
-para isso no backend hoje — inventar um quebraria o princípio de nunca
-mostrar o que não é real.
+O Task Board físico no mundo 2D (Estágio 1/2) continua navegando para a
+página real de Tarefas ao ser clicado -- ver GAME_ENGINE.md. Um overlay
+com colunas reais (Backlog/Ready/In Progress/.../Done/Failed) dentro do
+próprio canvas, conforme sugerido na spec do Estágio 3 seção 63, não foi
+construído nesta rodada (a página real de Tarefas já cobre a mesma
+necessidade); listado como pendência.
 
 ## Bug real encontrado e corrigido durante a implementação
 
-O primeiro `OfficeTaskBoard` usava `useOfficeStore((s) =>
-s.steps.filter(...))` como seletor do Zustand — `.filter()` sempre retorna
-um array novo, então o `useSyncExternalStore` do React entrava em loop
-infinito de re-render assim que a página montava com qualquer step
-presente. Corrigido selecionando o array bruto e filtrando com `useMemo`
-no componente. Coberto por um teste de regressão
-(`OfficeTaskBoard.test.tsx`) que falha imediatamente se o padrão voltar.
+Além do bug do Estágio 1 (loop infinito do `OfficeTaskBoard`, já
+documentado antes), o Estágio 3 encontrou e corrigiu, todos com teste de
+regressão:
+
+- `Router.status_of(...)` vs. `is_available(...)`: o teste de fallback
+  inicialmente usava `is_available` (só fica falso quando o circuit
+  breaker abre após várias falhas) em vez de `status_of` (reflete o
+  status explícito real imediatamente) -- um único `ProviderRateLimitError`
+  não bastava para o `ExecutionEngine` perceber o provider como
+  indisponível. Corrigido para checar `status_of`.
+- `RealOfficeAdapter`: um agente real que fica `IDLE` não emitia nenhum
+  evento -- a personagem ficava presa na última pose de trabalho para
+  sempre. Corrigido emitindo `reset` na transição para `IDLE`/`OFFLINE`.
 
 ## Persistência
 
-**Não implementado nesta primeira versão** (ver "Pendências" no relatório
-final): `office_layout`/`agent_position`/`desk_assignment` não são
-persistidos em SQLite ainda. O layout do mapa e o mapeamento de salas são
-hoje configuração estática no frontend (`map.ts`/`roleMapping.ts`), o que
-já é suficiente para o MVP porque nenhuma posição precisa sobreviver a um
-restart — ao reabrir o app, `officeStore.refresh()` já reconstrói o
-snapshot inteiro a partir do estado real do backend (agentes, execução
-ativa se houver uma, saúde de providers).
+Tabelas reais já existentes (`tasks`, `executions`, `execution_steps`,
+`provider_health`, `routing_decisions`, `execution_events`, ...) cobrem a
+maior parte da spec do Estágio 3 seção 7/71 sem nenhuma tabela nova, exceto
+as 2 colunas novas de `agents` (`preferred_provider`/`fallback_providers`,
+migração `0005`). Posições/layout do escritório continuam não persistidos
+-- não é necessário, já que `useRealOfficeSync` reconstrói o snapshot
+inteiro a partir do estado real do backend a cada boot.
 
 ## Modo Classic Dashboard
 
-O Office nunca é obrigatório (seção 34). Ele é a página padrão
-(`useUiStore`'s `activePage: "office"`), mas "Tarefas" (Workspace) continua
-inteiramente funcional e a um clique de distância na barra lateral — nada
-no motor de orquestração depende do Office estar aberto.
-
-## Fallback / Error Boundary
-
-`OfficePage` é envolvido pelo mesmo `ErrorBoundary` por página já usado em
-todas as telas (Estágio 4) — um erro de renderização no Office nunca
-derruba o resto do app; o usuário vê uma mensagem e pode trocar de tela
-pela barra lateral, e o orquestrador continua rodando (ele nunca dependeu
-do frontend para nada além de exibir progresso).
-
-## Como criar um novo agente/desk/sala
-
-1. **Novo agente**: já é possível — qualquer agente real de
-   `core/agents/registry.py` aparece automaticamente no escritório assim
-   que `agentsApi.list()` o retorna. O `homeRoom` dele é derivado de
-   `capabilities[0].name` via `roomForCapability` em `roleMapping.ts`.
-2. **Nova sala**: adicione uma entrada em `ROOMS` (`map.ts`) com um
-   retângulo do grid que não sobreponha outra sala, e uma entrada
-   correspondente em `DESTINATION_POINTS`. Adicione o novo `RoomId` ao
-   union em `types.ts`.
-3. **Nova regra de mapeamento categoria → sala**: edite
-   `CAPABILITY_TO_ROOM` em `roleMapping.ts`.
+Inalterado desde o Estágio 1: o Office é a página padrão, mas "Tarefas"
+continua inteiramente funcional e a um clique de distância.
 
 ## Pendências reais (não escondidas)
 
-- Botão "Conectar" disparando o fluxo OAuth interativo de um provider CLI
-  (`codex login`/`claude auth login` abrindo o navegador) — hoje a
-  detecção é automática para o que já está autenticado via terminal.
-- Persistência em SQLite de layout/posição/preferências (seção 35).
-- Pathfinding evita paredes de sala, mas não evita colisão entre dois
-  agentes ocupando a mesma célula simultaneamente (não crítico
-  visualmente com poucos agentes).
-- Minimap, áudio, avatares customizáveis pelo usuário, Low Power Mode
-  explícito, múltiplos andares/mapas -- tudo isso é "Fase 2" (seção 55),
-  deliberadamente fora desta primeira versão.
-- Sprites são placeholders geométricos (círculo colorido + ícone + label),
-  não arte pixel final -- trocar por sprite sheets reais é uma mudança
-  isolada em `OfficeScene.ts`, nada acima dela precisa mudar.
+- Frontend deriva `MEETING` pela heurística de sempre, não consumindo
+  diretamente os novos eventos `meeting.*` (resultado equivalente hoje).
+- Nenhum overlay de Task Board com colunas dentro do canvas (a página
+  real de Tarefas já cobre isso).
+- Sessão do Codex/Claude Code CLI (spec seção 84-86) não é explicitamente
+  preservada/reexibida entre chamadas -- o adapter CLI já mantém seu
+  próprio contexto interno real, mas o AgentMash não expõe esse id de
+  sessão na UI.
+- Gemini CLI não está instalado nesta máquina -- qualquer cenário
+  envolvendo Gemini real é `UNVERIFIED EXTERNAL DEPENDENCY`; os testes ao
+  vivo desta rodada usaram Codex CLI e Claude Code CLI, os dois
+  genuinamente autenticados aqui.

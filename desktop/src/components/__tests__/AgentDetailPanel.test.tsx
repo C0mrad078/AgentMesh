@@ -2,70 +2,59 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { AgentDetailPanel } from "@/components/AgentDetailPanel";
-import { useOfficeStore } from "@/stores/officeStore";
-import type { VirtualAgent } from "@/office/types";
-import type { ExecutionStep } from "@/types";
+import type { AgentInspectInfo } from "@/game/scenes/OfficeScene";
 
-function makeVirtualAgent(overrides: Partial<VirtualAgent> = {}): VirtualAgent {
+function makeInfo(overrides: Partial<AgentInspectInfo> = {}): AgentInspectInfo {
   return {
-    id: "agent_1", name: "Agent One", role: "Dev", provider: "openai", model: "gpt-5.1-codex",
-    homeRoom: "backend_desk", state: "ERROR", currentTaskId: "task_1", currentStepId: "estep_1",
-    currentExecutionId: "exec_1", destination: null, statusDetail: "Erro real", progress: null,
-    lastActivityAt: "2026-01-01T00:00:00Z", retryAt: null,
-    ...overrides,
-  };
-}
-
-function makeStep(overrides: Partial<ExecutionStep> = {}): ExecutionStep {
-  return {
-    id: "estep_1", execution_id: "exec_1", step_index: 1, name: "Implement feature", kind: "work",
-    agent_id: "agent_1", provider: "openai", status: "failed", input: {}, output: null,
-    error: { message: "Timeout exceeded" }, attempt: 2, started_at: "2026-01-01T00:00:00Z", completed_at: null,
+    id: "agent_codex", name: "Codex", roleLabel: "Frontend Developer", state: "CODING",
+    taskTitle: "Implement Provider Screen", provider: "codex_cli", progress: 0.68,
+    detail: "Implement Provider Screen", room: "Frontend Room", fallbackFrom: null,
     ...overrides,
   };
 }
 
 describe("AgentDetailPanel", () => {
-  it("shows real step error detail, never fabricated", () => {
-    useOfficeStore.setState({
-      agents: { agent_1: makeVirtualAgent() }, meetings: [], steps: [makeStep()], loaded: true, error: null,
-    });
+  it("shows the agent's real name, role, task, provider, room, and progress", () => {
+    render(<AgentDetailPanel agent={makeInfo()} onClose={vi.fn()} />);
 
-    render(<AgentDetailPanel agentId="agent_1" onClose={vi.fn()} />);
-
-    expect(screen.getByText("Agent One")).toBeInTheDocument();
-    expect(screen.getByText("Timeout exceeded")).toBeInTheDocument();
-    expect(screen.getByText(/Tentativa 2/)).toBeInTheDocument();
+    expect(screen.getByText("Codex")).toBeInTheDocument();
+    expect(screen.getByText("Frontend Developer")).toBeInTheDocument();
+    expect(screen.getByText("Implement Provider Screen")).toBeInTheDocument();
+    expect(screen.getByText("codex_cli")).toBeInTheDocument();
+    expect(screen.getByText("Frontend Room")).toBeInTheDocument();
+    expect(screen.getByText("68%")).toBeInTheDocument();
   });
 
-  it("shows the idle message when there is no current step", () => {
-    useOfficeStore.setState({
-      agents: { agent_1: makeVirtualAgent({ currentStepId: null, state: "IDLE" }) },
-      meetings: [], steps: [], loaded: true, error: null,
-    });
+  it("shows 'Fallback from: X' when the task was picked up from another real agent", () => {
+    render(<AgentDetailPanel agent={makeInfo({ fallbackFrom: "Codex" })} onClose={vi.fn()} />);
+    expect(screen.getByText("Fallback from: Codex")).toBeInTheDocument();
+  });
 
-    render(<AgentDetailPanel agentId="agent_1" onClose={vi.fn()} />);
+  it("shows no fallback note when the task was assigned directly", () => {
+    render(<AgentDetailPanel agent={makeInfo()} onClose={vi.fn()} />);
+    expect(screen.queryByText(/Fallback from:/)).not.toBeInTheDocument();
+  });
 
-    expect(screen.getByText(/está ocioso na mesa dele/)).toBeInTheDocument();
+  it("marks ERROR and BLOCKED states with the destructive badge", () => {
+    render(<AgentDetailPanel agent={makeInfo({ state: "ERROR" })} onClose={vi.fn()} />);
+    expect(screen.getByText("Erro")).toBeInTheDocument();
   });
 
   it("calls onClose when the close button is clicked", async () => {
     const onClose = vi.fn();
-    useOfficeStore.setState({
-      agents: { agent_1: makeVirtualAgent() }, meetings: [], steps: [makeStep()], loaded: true, error: null,
-    });
+    render(<AgentDetailPanel agent={makeInfo()} onClose={onClose} />);
 
-    render(<AgentDetailPanel agentId="agent_1" onClose={onClose} />);
     await userEvent.click(screen.getByRole("button", { name: "Fechar" }));
 
     expect(onClose).toHaveBeenCalled();
   });
 
-  it("renders nothing for an unknown agent id", () => {
-    useOfficeStore.setState({ agents: {}, meetings: [], steps: [], loaded: true, error: null });
+  it("calls onFollow when the follow button is clicked", async () => {
+    const onFollow = vi.fn();
+    render(<AgentDetailPanel agent={makeInfo()} onClose={vi.fn()} onFollow={onFollow} />);
 
-    const { container } = render(<AgentDetailPanel agentId="does_not_exist" onClose={vi.fn()} />);
+    await userEvent.click(screen.getByRole("button", { name: "Seguir agente" }));
 
-    expect(container).toBeEmptyDOMElement();
+    expect(onFollow).toHaveBeenCalled();
   });
 });

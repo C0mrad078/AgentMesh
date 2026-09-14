@@ -394,7 +394,7 @@ async def _provider_health(_params: dict[str, Any], ctx: BridgeContext) -> list[
     return [
         {
             "provider": s.provider, "status": s.status.value, "last_error": s.last_error,
-            "consecutive_failures": s.consecutive_failures,
+            "consecutive_failures": s.consecutive_failures, "retry_after_seconds": s.retry_after_seconds,
         }
         for s in snapshots
     ]

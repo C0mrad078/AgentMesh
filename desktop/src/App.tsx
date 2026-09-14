@@ -9,7 +9,7 @@ import { SettingsPage } from "@/pages/SettingsPage";
 import { LearningPage } from "@/pages/LearningPage";
 import { useUiStore } from "@/stores/uiStore";
 import { useBridgeSubscription } from "@/hooks/useBridgeSubscription";
-import { useOfficeSync } from "@/hooks/useOfficeSync";
+import { useRealOfficeSync } from "@/hooks/useRealOfficeSync";
 
 // Phaser alone is >1MB minified -- code-split so every other page's
 // bundle stays small and the Office's weight is only ever paid by
@@ -37,7 +37,7 @@ const PAGE_LABELS: Record<keyof typeof PAGES, string> = {
 
 export default function App() {
   useBridgeSubscription();
-  useOfficeSync();
+  useRealOfficeSync();
   const activePage = useUiStore((s) => s.activePage);
   const Page = PAGES[activePage];
 

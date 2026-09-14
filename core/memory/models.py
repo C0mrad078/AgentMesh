@@ -26,7 +26,19 @@ from datetime import datetime
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+
+
+class MemoryScope(str, Enum):
+    """Refactor V2, Phase 1 (docs/refactor-v2-plan.md §4): which of the
+    four levels a memory belongs to. Only one of `project_id`/`agent_id`/
+    `session_id` may be set, matching the scope -- enforced by
+    `MemoryWrite`'s validator below, not left to caller discipline."""
+
+    GLOBAL = "global"
+    PROJECT = "project"
+    AGENT = "agent"
+    SESSION = "session"
 
 
 class MemoryKind(str, Enum):
@@ -57,7 +69,10 @@ class MemoryProvenance(BaseModel):
 
 class MemoryRecord(BaseModel):
     id: str
-    project_id: str
+    scope: MemoryScope = MemoryScope.PROJECT
+    project_id: str | None = None
+    agent_id: str | None = None
+    session_id: str | None = None
     kind: MemoryKind = MemoryKind.FACT
     category: MemoryCategory = MemoryCategory.OTHER
     key: str
@@ -73,7 +88,10 @@ class MemoryRecord(BaseModel):
 
 
 class MemoryWrite(BaseModel):
-    project_id: str
+    scope: MemoryScope = MemoryScope.PROJECT
+    project_id: str | None = None
+    agent_id: str | None = None
+    session_id: str | None = None
     kind: MemoryKind = MemoryKind.FACT
     category: MemoryCategory = MemoryCategory.OTHER
     key: str = Field(min_length=1, max_length=200)
@@ -81,3 +99,21 @@ class MemoryWrite(BaseModel):
     importance: float = Field(default=0.5, ge=0.0, le=1.0)
     confidence: float = Field(default=0.7, ge=0.0, le=1.0)
     provenance: MemoryProvenance = Field(default_factory=MemoryProvenance)
+
+    @model_validator(mode="after")
+    def _exactly_one_scope_identifier(self) -> MemoryWrite:
+        by_scope = {
+            MemoryScope.GLOBAL: (),
+            MemoryScope.PROJECT: ("project_id",),
+            MemoryScope.AGENT: ("agent_id",),
+            MemoryScope.SESSION: ("session_id",),
+        }
+        required = by_scope[self.scope]
+        all_fields = ("project_id", "agent_id", "session_id")
+        present = {f for f in all_fields if getattr(self, f) is not None}
+        if present != set(required):
+            raise ValueError(
+                f"MemoryWrite scope={self.scope.value!r} requires exactly "
+                f"{set(required) or '{}'} to be set, got {present or '{}'}."
+            )
+        return self

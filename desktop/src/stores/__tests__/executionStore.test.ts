@@ -36,6 +36,7 @@ describe("useExecutionStore", () => {
       task: null,
       submitting: false,
       error: null,
+      fallbacks: {},
     });
     vi.clearAllMocks();
   });
@@ -115,6 +116,29 @@ describe("useExecutionStore", () => {
 
     expect(executionsApi.cancel).toHaveBeenCalledWith("exec_1");
     expect(tasksApi.cancel).not.toHaveBeenCalled();
+  });
+
+  it("handleOrchestrationEvent records a real fallback.used event, keyed by the agent that picked up the work", () => {
+    useExecutionStore.setState({ activeExecutionId: "exec_1" });
+    useExecutionStore.getState().handleOrchestrationEvent("fallback.used", {
+      execution_id: "exec_1", from_agent_id: "agent_codex_cli_developer",
+      to_agent_id: "agent_claude_code_architect", reason: "provider_unavailable",
+    });
+
+    const { fallbacks } = useExecutionStore.getState();
+    expect(fallbacks["agent_claude_code_architect"]).toEqual({
+      fromAgentId: "agent_codex_cli_developer", toAgentId: "agent_claude_code_architect",
+      reason: "provider_unavailable",
+    });
+  });
+
+  it("ignores a fallback.used event for a different execution", () => {
+    useExecutionStore.setState({ activeExecutionId: "exec_1" });
+    useExecutionStore.getState().handleOrchestrationEvent("fallback.used", {
+      execution_id: "exec_other", from_agent_id: "agent_codex_cli_developer", to_agent_id: "agent_claude_code_architect",
+    });
+
+    expect(useExecutionStore.getState().fallbacks).toEqual({});
   });
 
   it("cancelActive surfaces a rejected task cancellation as a store error instead of throwing", async () => {

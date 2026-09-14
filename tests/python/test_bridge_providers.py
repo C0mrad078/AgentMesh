@@ -103,6 +103,8 @@ async def test_provider_health_lists_every_supported_provider(ctx) -> None:
     result = await dispatch("provider.health", {}, ctx)
     assert {r["provider"] for r in result} == {"anthropic", "gemini", "openai"}
     assert all(r["status"] == "unknown" for r in result)
+    # Stage 3: real backoff data (never fabricated) surfaces here too.
+    assert all(r["retry_after_seconds"] is None for r in result)
 
 
 async def test_model_list_includes_seeded_defaults(ctx) -> None:

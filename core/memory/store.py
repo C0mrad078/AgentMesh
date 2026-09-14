@@ -18,7 +18,7 @@ from abc import ABC, abstractmethod
 
 from core.database.repositories.memory_conflicts_repo import MemoryConflictsRepository
 from core.database.repositories.project_memories_repo import ProjectMemoriesRepository
-from core.memory.models import MemoryRecord, MemoryWrite
+from core.memory.models import MemoryRecord, MemoryScope, MemoryWrite
 from core.utils.ids import new_id
 
 
@@ -47,7 +47,7 @@ class SqliteMemoryStore(MemoryStore):
         if data.provenance.source_user_input and data.confidence < 1.0:
             data = data.model_copy(update={"confidence": 1.0})
 
-        existing = await self._repository.get_active(data.project_id, data.key)
+        existing = await self._repository.get_active_for_scope(data)
         if existing is not None and existing.value == data.value:
             return await self._repository.touch(existing.id, confidence=max(existing.confidence, data.confidence))
 
@@ -55,10 +55,15 @@ class SqliteMemoryStore(MemoryStore):
         if existing is not None:
             # Supersede the old row *before* inserting the new one -- both
             # cannot be "active" for the same key at once under the
-            # partial unique index (see migration 0004).
+            # partial unique index (see migrations 0004/0012).
             await self._repository.supersede(existing.id, superseded_by=new_memory_id)
         new_record = await self._repository.create_active(data, memory_id=new_memory_id)
-        if existing is not None and self._conflicts is not None:
+        # `memory_conflicts` is a project-scoped audit table (its
+        # `project_id` column is NOT NULL) -- conflicts on the other three
+        # scopes still supersede correctly above, they just aren't mirrored
+        # into this particular audit table yet. Disclosed limitation, not
+        # silently dropped: see docs/refactor-v2-plan.md §7.
+        if existing is not None and self._conflicts is not None and data.project_id is not None:
             await self._conflicts.record(
                 data.project_id, old_memory_id=existing.id, new_memory_id=new_record.id,
                 detail=f"Chave '{data.key}' atualizada: valor anterior substituído.",
@@ -73,3 +78,35 @@ class SqliteMemoryStore(MemoryStore):
 
     async def history(self, project_id: str, key: str) -> list[MemoryRecord]:
         return await self._repository.list_history_for_key(project_id, key)
+
+    # -- Refactor V2, Phase 1: the other three scopes ---------------------
+    # `remember()` above already routes any scope through the same
+    # supersession logic (`MemoryWrite.scope` decides the lookup column).
+    # These are the read-side conveniences `recall`/`recall_all` already
+    # give Project scope, extended to Global/Agent/Session so the new
+    # scopes are actually usable, not just writable. The full
+    # `MemoryRetriever`/relevance-filtering story is Phase 5.
+
+    async def recall_global(self, key: str) -> MemoryRecord | None:
+        return await self._repository.get_active_for_scope(
+            MemoryWrite(scope=MemoryScope.GLOBAL, key=key)
+        )
+
+    async def recall_all_global(self) -> list[MemoryRecord]:
+        return await self._repository.list_active_for_scope(MemoryScope.GLOBAL)
+
+    async def recall_for_agent(self, agent_id: str, key: str) -> MemoryRecord | None:
+        return await self._repository.get_active_for_scope(
+            MemoryWrite(scope=MemoryScope.AGENT, agent_id=agent_id, key=key)
+        )
+
+    async def recall_all_for_agent(self, agent_id: str) -> list[MemoryRecord]:
+        return await self._repository.list_active_for_scope(MemoryScope.AGENT, agent_id=agent_id)
+
+    async def recall_for_session(self, session_id: str, key: str) -> MemoryRecord | None:
+        return await self._repository.get_active_for_scope(
+            MemoryWrite(scope=MemoryScope.SESSION, session_id=session_id, key=key)
+        )
+
+    async def recall_all_for_session(self, session_id: str) -> list[MemoryRecord]:
+        return await self._repository.list_active_for_scope(MemoryScope.SESSION, session_id=session_id)

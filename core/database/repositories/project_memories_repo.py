@@ -21,6 +21,7 @@ from core.memory.models import (
     MemoryKind,
     MemoryProvenance,
     MemoryRecord,
+    MemoryScope,
     MemoryWrite,
 )
 from core.utils.ids import new_id
@@ -30,7 +31,10 @@ from core.utils.time import utc_now
 def _row_to_record(row: aiosqlite.Row) -> MemoryRecord:
     return MemoryRecord(
         id=row["id"],
+        scope=MemoryScope(row["scope"]),
         project_id=row["project_id"],
+        agent_id=row["agent_id"],
+        session_id=row["session_id"],
         kind=MemoryKind(row["kind"]),
         category=MemoryCategory(row["category"]),
         key=row["key"],
@@ -56,12 +60,14 @@ class ProjectMemoriesRepository:
         await self._db.execute(
             """
             INSERT INTO project_memories
-                (id, project_id, kind, category, key, value, importance, confidence,
-                 provenance, valid_from, valid_until, superseded_by, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)
+                (id, scope, project_id, agent_id, session_id, kind, category, key, value,
+                 importance, confidence, provenance, valid_from, valid_until, superseded_by,
+                 created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)
             """,
             (
-                memory_id, data.project_id, data.kind.value, data.category.value, data.key,
+                memory_id, data.scope.value, data.project_id, data.agent_id, data.session_id,
+                data.kind.value, data.category.value, data.key,
                 dumps(data.value), data.importance, data.confidence,
                 dumps(data.provenance.model_dump()), now, now, now,
             ),
@@ -93,6 +99,52 @@ class ProjectMemoriesRepository:
             (project_id, key),
         )
         return _row_to_record(row) if row else None
+
+    async def get_active_for_scope(self, data: MemoryWrite) -> MemoryRecord | None:
+        """Scope-generic counterpart of `get_active` -- the column checked
+        against `key` depends on `data.scope` (enforced by `MemoryWrite`'s
+        own validator, so exactly one of these is ever non-None)."""
+        column = {
+            MemoryScope.PROJECT: ("project_id", data.project_id),
+            MemoryScope.AGENT: ("agent_id", data.agent_id),
+            MemoryScope.SESSION: ("session_id", data.session_id),
+        }.get(data.scope)
+        if column is None:  # GLOBAL -- no owning column, just scope + key
+            row = await self._db.fetch_one(
+                "SELECT * FROM project_memories WHERE scope = 'global' AND key = ? AND valid_until IS NULL",
+                (data.key,),
+            )
+        else:
+            column_name, value = column
+            row = await self._db.fetch_one(
+                f"SELECT * FROM project_memories WHERE {column_name} = ? AND key = ? "
+                "AND valid_until IS NULL",
+                (value, data.key),
+            )
+        return _row_to_record(row) if row else None
+
+    async def list_active_for_scope(
+        self, scope: MemoryScope, *, project_id: str | None = None,
+        agent_id: str | None = None, session_id: str | None = None,
+    ) -> list[MemoryRecord]:
+        column = {
+            MemoryScope.PROJECT: ("project_id", project_id),
+            MemoryScope.AGENT: ("agent_id", agent_id),
+            MemoryScope.SESSION: ("session_id", session_id),
+        }.get(scope)
+        if column is None:
+            rows = await self._db.fetch_all(
+                "SELECT * FROM project_memories WHERE scope = 'global' AND valid_until IS NULL "
+                "ORDER BY importance DESC",
+            )
+        else:
+            column_name, value = column
+            rows = await self._db.fetch_all(
+                f"SELECT * FROM project_memories WHERE {column_name} = ? AND valid_until IS NULL "
+                "ORDER BY importance DESC",
+                (value,),
+            )
+        return [_row_to_record(row) for row in rows]
 
     async def list_active_for_project(self, project_id: str) -> list[MemoryRecord]:
         rows = await self._db.fetch_all(

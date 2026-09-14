@@ -1,14 +1,13 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 import Phaser from "phaser";
-import { OfficeScene } from "@/office/scenes/OfficeScene";
-import { OfficeController } from "@/office/OfficeController";
-import { CELL_SIZE, GRID_COLS, GRID_ROWS } from "@/office/map";
-import { useOfficeStore } from "@/stores/officeStore";
+import { createOfficeGame } from "@/game/Game";
+import type { AgentInspectInfo, OfficeScene, OfficeSummary } from "@/game/scenes/OfficeScene";
 
 interface PhaserOfficeProps {
   onHoverAgent: (agentId: string | null) => void;
   onClickAgent: (agentId: string) => void;
-  onInteractiveObjectClick: (objectId: string) => void;
+  onTaskBoardClick: () => void;
+  onSummaryChange: (summary: OfficeSummary) => void;
 }
 
 export interface PhaserOfficeHandle {
@@ -18,33 +17,32 @@ export interface PhaserOfficeHandle {
   reset: () => void;
   followAgent: (agentId: string) => void;
   stopFollow: () => void;
+  toggleDebug: () => void;
+  inspect: (agentId: string) => AgentInspectInfo | null;
+  listAgents: () => AgentInspectInfo[];
 }
 
 const ZOOM_STEP = 0.2;
 
 /**
- * Mounts exactly one `Phaser.Game` for the component's lifetime and wires
- * it to `officeStore` through a single `OfficeController` (spec section
- * 17) -- this component itself never re-renders on office state changes;
- * it subscribes to the store imperatively so Phaser's own render loop
- * (spec section 31/32: FPS budget belongs to the models, not the canvas)
- * is the only thing driving redraws.
- *
- * Camera controls (spec section 52-55) are exposed imperatively via
- * `ref` rather than props, since they are one-shot commands ("zoom in
- * now"), not state React needs to track.
+ * Mounts exactly one `Phaser.Game` (via `createOfficeGame`) for the
+ * component's lifetime. Phaser's own game loop drives every agent
+ * autonomously (spec section 30/37/38) -- React never re-renders this
+ * component in response to office state, and never commands a
+ * character's position; it only issues camera commands through `ref`
+ * and receives read-only hover/click/task-board events through props.
  */
 export const PhaserOffice = forwardRef<PhaserOfficeHandle, PhaserOfficeProps>(
-  function PhaserOffice({ onHoverAgent, onClickAgent, onInteractiveObjectClick }, ref) {
+  function PhaserOffice({ onHoverAgent, onClickAgent, onTaskBoardClick, onSummaryChange }, ref) {
     const containerRef = useRef<HTMLDivElement>(null);
-    // Refs so the one-time Phaser mount below always calls the latest
-    // callback without needing to re-create the game on every render.
     const onHoverRef = useRef(onHoverAgent);
     const onClickRef = useRef(onClickAgent);
-    const onObjectClickRef = useRef(onInteractiveObjectClick);
+    const onTaskBoardRef = useRef(onTaskBoardClick);
+    const onSummaryRef = useRef(onSummaryChange);
     onHoverRef.current = onHoverAgent;
     onClickRef.current = onClickAgent;
-    onObjectClickRef.current = onInteractiveObjectClick;
+    onTaskBoardRef.current = onTaskBoardClick;
+    onSummaryRef.current = onSummaryChange;
     const sceneRef = useRef<OfficeScene | null>(null);
 
     useImperativeHandle(ref, () => ({
@@ -54,69 +52,37 @@ export const PhaserOffice = forwardRef<PhaserOfficeHandle, PhaserOfficeProps>(
       reset: () => sceneRef.current?.resetCamera(),
       followAgent: (agentId: string) => sceneRef.current?.followAgent(agentId),
       stopFollow: () => sceneRef.current?.stopFollow(),
+      toggleDebug: () => sceneRef.current?.toggleDebug(),
+      inspect: (agentId: string) => sceneRef.current?.inspect(agentId) ?? null,
+      listAgents: () => sceneRef.current?.listAgents() ?? [],
     }));
 
     useEffect(() => {
       const container = containerRef.current;
       if (!container) return;
 
-      // Real bug found via manual testing: React 19 StrictMode's dev-only
-      // mount -> cleanup -> mount double-invoke left a *second*,
+      // Real bug found via manual testing (Stage 1): React 19 StrictMode's
+      // dev-only mount -> cleanup -> mount double-invoke left a *second*,
       // input-dead canvas in the DOM -- `game.destroy(true)` did not
-      // reliably remove its canvas before the next mount ran, so two
-      // `<canvas>` elements stacked in the container, and every click
-      // landed on the dead first one (whose Phaser instance was already
-      // destroyed and had no input listeners left). Clearing the
-      // container before creating a new game guarantees exactly one
+      // reliably remove its canvas before the next mount ran. Clearing
+      // the container before creating a new game guarantees exactly one
       // canvas exists no matter how Phaser's own destroy timing behaves.
       container.replaceChildren();
 
-      const game = new Phaser.Game({
-        type: Phaser.AUTO,
-        backgroundColor: "#14161c",
-        scene: [OfficeScene],
-        fps: { target: 60, min: 20 },
-        render: { pixelArt: true, antialias: false },
-        // Real bug found via manual testing: without an explicit Scale
-        // Manager mode, the canvas renders at its fixed internal
-        // resolution (1536x960) and simply overflows/gets clipped by the
-        // container's `overflow-hidden` instead of fitting it -- and,
-        // critically, Phaser's pointer-to-world coordinate mapping is
-        // computed from the canvas's actual on-screen bounding rect, so a
-        // click at the *visually* correct spot landed on the wrong grid
-        // cell entirely. FIT mode keeps the fixed 1536x960 world/grid
-        // coordinate system intact (nothing above this changes) while
-        // letting Phaser scale the canvas via CSS *and* correctly
-        // re-map pointer coordinates for that scale.
-        scale: {
-          mode: Phaser.Scale.FIT,
-          autoCenter: Phaser.Scale.CENTER_BOTH,
-          parent: container,
-          width: GRID_COLS * CELL_SIZE,
-          height: GRID_ROWS * CELL_SIZE,
-        },
-      });
-
-      let controller: OfficeController | null = null;
-      let unsubscribe: (() => void) | undefined;
+      const game = createOfficeGame(container);
 
       game.events.once(Phaser.Core.Events.READY, () => {
-        const scene = game.scene.getScene("OfficeScene") as OfficeScene;
-        sceneRef.current = scene;
-        scene.events.on("interactiveObjectClicked", (objectId: string) => onObjectClickRef.current(objectId));
-        controller = new OfficeController(
-          scene,
-          (agentId) => onHoverRef.current(agentId),
-          (agentId) => onClickRef.current(agentId),
-        );
-        controller.sync(useOfficeStore.getState().agents);
-        unsubscribe = useOfficeStore.subscribe((state, prev) => {
-          if (state.agents !== prev.agents) controller?.sync(state.agents);
+        game.scene.getScene("OfficeScene").events.once(Phaser.Scenes.Events.CREATE, () => {
+          const scene = game.scene.getScene("OfficeScene") as unknown as OfficeScene;
+          sceneRef.current = scene;
+
+          scene.events.on("agent:hover", (agentId: string | null) => onHoverRef.current(agentId));
+          scene.events.on("agent:click", (agentId: string) => onClickRef.current(agentId));
+          scene.events.on("taskBoard:click", () => onTaskBoardRef.current());
+          scene.events.on("agents:summary", (summary: OfficeSummary) => onSummaryRef.current(summary));
         });
       });
 
-      // Pause rendering when the window loses visibility -- the orchestrator
-      // keeps working, only the decorative canvas idles (spec section 31/49).
       const handleVisibility = () => {
         if (document.hidden) game.loop.sleep();
         else game.loop.wake();
@@ -125,7 +91,6 @@ export const PhaserOffice = forwardRef<PhaserOfficeHandle, PhaserOfficeProps>(
 
       return () => {
         document.removeEventListener("visibilitychange", handleVisibility);
-        unsubscribe?.();
         sceneRef.current = null;
         game.destroy(true);
         // Defense in depth, see the comment above the `replaceChildren()`
@@ -135,6 +100,6 @@ export const PhaserOffice = forwardRef<PhaserOfficeHandle, PhaserOfficeProps>(
       };
     }, []);
 
-    return <div ref={containerRef} className="h-full w-full overflow-hidden rounded-lg" />;
+    return <div ref={containerRef} className="h-full w-full overflow-hidden" />;
   },
 );

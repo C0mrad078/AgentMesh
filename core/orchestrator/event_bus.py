@@ -55,6 +55,11 @@ class EventType(str, Enum):
     REFLECTION_STARTED = "reflection.started"
     REFLECTION_COMPLETED = "reflection.completed"
     LEARNING_UPDATED = "learning.updated"
+    # Stage 3 (AgentMash spec section 15-19): a real multi-agent
+    # collaborative-planning window -- see `core.orchestrator.meeting_manager`.
+    MEETING_CREATED = "meeting.created"
+    MEETING_STARTED = "meeting.started"
+    MEETING_COMPLETED = "meeting.completed"
 
 
 @dataclass(frozen=True)

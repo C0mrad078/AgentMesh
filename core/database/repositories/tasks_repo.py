@@ -27,6 +27,9 @@ def _row_to_task(row: aiosqlite.Row) -> Task:
         updated_at=row["updated_at"],
         started_at=row["started_at"],
         completed_at=row["completed_at"],
+        assigned_agent_id=row["assigned_agent_id"],
+        assigned_team_id=row["assigned_team_id"],
+        session_id=row["session_id"],
     )
 
 
@@ -41,8 +44,8 @@ class TasksRepository:
             """
             INSERT INTO tasks (id, project_id, conversation_id, title, description, mode,
                                 status, input, result, created_at, updated_at, started_at,
-                                completed_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, NULL, NULL)
+                                completed_at, assigned_agent_id, assigned_team_id, session_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, NULL, NULL, ?, ?, NULL)
             """,
             (
                 task_id,
@@ -55,6 +58,8 @@ class TasksRepository:
                 dumps(data.input),
                 now.isoformat(),
                 now.isoformat(),
+                data.assigned_agent_id,
+                data.assigned_team_id,
             ),
         )
         return await self.get_or_raise(task_id)
@@ -105,6 +110,15 @@ class TasksRepository:
             ),
         )
         _ = current
+        return await self.get_or_raise(task_id)
+
+    async def assign_session(self, task_id: str, session_id: str) -> Task:
+        await self.get_or_raise(task_id)
+        now = utc_now().isoformat()
+        await self._db.execute(
+            "UPDATE tasks SET session_id = ?, updated_at = ? WHERE id = ?",
+            (session_id, now, task_id),
+        )
         return await self.get_or_raise(task_id)
 
     async def find_stale_running(self) -> list[Task]:

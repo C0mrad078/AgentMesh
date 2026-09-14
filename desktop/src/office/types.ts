@@ -20,22 +20,19 @@ export type AgentState =
   | "ERROR"
   | "COMPLETED";
 
-export type RoomId =
-  | "ceo_office"
-  | "meeting_room"
-  | "frontend_desk"
-  | "backend_desk"
-  | "design_desk"
-  | "testing_lab"
-  | "lounge";
+export type { RoomId } from "@/game/maps/roomTypes";
+import type { RoomId } from "@/game/maps/roomTypes";
 
 /** A named point the office graph knows how to route to -- callers ask
  * for a destination id, never raw coordinates (spec: `moveAgent(agentId,
  * "meeting_room")`, not scattered coordinates). */
 export type DestinationId =
   | RoomId
-  | "lounge_sofa"
+  | "lounge_sofa_01"
+  | "lounge_sofa_02"
   | "coffee_machine"
+  | "recovery_bed_01"
+  | "recovery_bed_02"
   | "task_board"
   | "meeting_seat_01"
   | "meeting_seat_02"

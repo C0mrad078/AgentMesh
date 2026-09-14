@@ -89,7 +89,7 @@ describe("deriveOfficeSnapshot", () => {
 
   it("a running step whose provider is unhealthy overrides WORKING with RATE_LIMITED -> Lounge", () => {
     const health: ProviderHealthRecord[] = [
-      { provider: "openai", status: "rate_limited", last_error: "429", consecutive_failures: 1 },
+      { provider: "openai", status: "rate_limited", last_error: "429", consecutive_failures: 1, retry_after_seconds: null },
     ];
     const { agents } = deriveOfficeSnapshot({
       agents: [makeAgent()], steps: [makeStep()], providerHealth: health, activeTask: makeTask(),
@@ -101,7 +101,7 @@ describe("deriveOfficeSnapshot", () => {
 
   it("a healthy provider does not trigger RATE_LIMITED", () => {
     const health: ProviderHealthRecord[] = [
-      { provider: "openai", status: "online", last_error: null, consecutive_failures: 0 },
+      { provider: "openai", status: "online", last_error: null, consecutive_failures: 0, retry_after_seconds: null },
     ];
     const { agents } = deriveOfficeSnapshot({
       agents: [makeAgent()], steps: [makeStep()], providerHealth: health, activeTask: makeTask(),

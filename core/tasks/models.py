@@ -47,6 +47,13 @@ class Task(BaseModel):
     updated_at: datetime
     started_at: datetime | None = None
     completed_at: datetime | None = None
+    # Refactor V2, Phase 1 (docs/refactor-v2-plan.md §4): explicit
+    # assignment, all nullable -- today's automatic/DAG-routed tasks leave
+    # these unset and are entirely unaffected. The DAG-level `PlanStep`/
+    # `Router` assignment system is separate and untouched by these.
+    assigned_agent_id: str | None = None
+    assigned_team_id: str | None = None
+    session_id: str | None = None
 
 
 class TaskCreate(BaseModel):
@@ -56,3 +63,5 @@ class TaskCreate(BaseModel):
     mode: TaskMode = TaskMode.AUTOMATIC
     conversation_id: str | None = None
     input: dict[str, Any] = Field(default_factory=dict)
+    assigned_agent_id: str | None = None
+    assigned_team_id: str | None = None

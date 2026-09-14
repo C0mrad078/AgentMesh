@@ -11,9 +11,10 @@ from __future__ import annotations
 
 import aiosqlite
 
-from core.agents.models import Agent, AgentPermissions
+from core.agents.models import Agent, AgentPermissions, AgentStatus
 from core.database.connection import Database
 from core.database.json_codec import dumps, loads
+from core.runtime.execution_backend import ExecutionBackendType
 from core.utils.time import utc_now
 
 
@@ -30,6 +31,14 @@ def _row_to_agent(row: aiosqlite.Row) -> Agent:
         permissions=AgentPermissions(**loads(row["permissions"], {})),
         config=loads(row["config"], {}),
         active=bool(row["active"]),
+        preferred_provider=row["preferred_provider"],
+        fallback_providers=loads(row["fallback_providers"], []),
+        role=row["role"],
+        avatar=row["avatar"],
+        status=AgentStatus(row["status"]),
+        preferred_backend=ExecutionBackendType(row["preferred_backend"]) if row["preferred_backend"] else None,
+        fallback_backend=ExecutionBackendType(row["fallback_backend"]) if row["fallback_backend"] else None,
+        memory_profile=loads(row["memory_profile"], {}),
     )
 
 
@@ -43,20 +52,31 @@ class AgentsRepository:
             """
             INSERT INTO agents (id, name, description, provider, model, system_prompt,
                                  capabilities, tools, permissions, config, active,
+                                 preferred_provider, fallback_providers,
+                                 role, avatar, status, preferred_backend, fallback_backend, memory_profile,
                                  created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name, description = excluded.description,
                 provider = excluded.provider, model = excluded.model,
                 system_prompt = excluded.system_prompt, capabilities = excluded.capabilities,
                 tools = excluded.tools, permissions = excluded.permissions,
-                config = excluded.config, active = excluded.active, updated_at = excluded.updated_at
+                config = excluded.config, active = excluded.active,
+                preferred_provider = excluded.preferred_provider,
+                fallback_providers = excluded.fallback_providers,
+                role = excluded.role, avatar = excluded.avatar, status = excluded.status,
+                preferred_backend = excluded.preferred_backend, fallback_backend = excluded.fallback_backend,
+                memory_profile = excluded.memory_profile, updated_at = excluded.updated_at
             """,
             (
                 agent.id, agent.name, agent.description, agent.provider, agent.model,
                 agent.system_prompt, dumps([c.model_dump() for c in agent.capabilities]),
                 dumps(agent.tools), dumps(agent.permissions.model_dump()), dumps(agent.config),
-                int(agent.active), now, now,
+                int(agent.active), agent.preferred_provider, dumps(agent.fallback_providers),
+                agent.role, agent.avatar, agent.status.value,
+                agent.preferred_backend.value if agent.preferred_backend else None,
+                agent.fallback_backend.value if agent.fallback_backend else None,
+                dumps(agent.memory_profile), now, now,
             ),
         )
 

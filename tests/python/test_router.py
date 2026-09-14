@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from core.agents.models import Agent, AgentCapability, AgentPermissions
 from core.agents.registry import AgentRegistry
 from core.orchestrator.models import PlanStep, RiskLevel
 from core.orchestrator.router import Router, RoutingWeights
@@ -8,7 +9,7 @@ from core.providers.circuit_breaker import CircuitBreaker
 from core.providers.health import ProviderHealthMonitor
 from core.providers.mock_provider import MockProvider
 from core.providers.pool import ProviderPool
-from core.providers.registry import ModelRegistry
+from core.providers.registry import ModelInfo, ModelRegistry
 from core.utils.errors import NotFoundError, ProviderTimeoutError
 
 
@@ -116,3 +117,63 @@ async def test_alternatives_exclude_the_winner() -> None:
     router = _make_router()
     decision = await router.route(_step("general"))
     assert decision.agent_id not in decision.alternatives
+
+
+def _fallback_preference_setup() -> tuple[Router, str, str]:
+    """Two equally-capable agents on two distinct (mock, but distinctly
+    named) providers -- neither has any other scoring edge over the
+    other, so any score difference between them is attributable only to
+    `preferred_fallback_providers`."""
+    provider_a = MockProvider()
+    provider_a.name = "provider_a"  # test-only rename so the pool sees two distinct providers
+    provider_b = MockProvider()
+    provider_b.name = "provider_b"
+    pool = ProviderPool()
+    pool.register(provider_a)
+    pool.register(provider_b)
+
+    models = ModelRegistry(
+        models=[
+            ModelInfo(
+                provider="provider_a", model_id="default", display_name="A",
+                capabilities=("testing",), priority=1,
+            ),
+            ModelInfo(
+                provider="provider_b", model_id="default", display_name="B",
+                capabilities=("testing",), priority=1,
+            ),
+        ]
+    )
+    agent_a = Agent(
+        id="agent_test_a", name="Agent A", provider="provider_a", model="default",
+        capabilities=[AgentCapability(name="testing", description="")],
+        permissions=AgentPermissions(),
+    )
+    agent_b = Agent(
+        id="agent_test_b", name="Agent B", provider="provider_b", model="default",
+        capabilities=[AgentCapability(name="testing", description="")],
+        permissions=AgentPermissions(),
+    )
+    registry = AgentRegistry([agent_a, agent_b])
+    health = ProviderHealthMonitor(CircuitBreaker())
+    router = Router(registry, models, pool, health)
+    return router, agent_a.id, agent_b.id
+
+
+async def test_fallback_preference_bonus_favors_the_declared_provider() -> None:
+    router, agent_a_id, agent_b_id = _fallback_preference_setup()
+    step = _step("testing")
+
+    baseline = await router.route(step)
+    assert baseline.agent_id == agent_a_id  # tie-break: registration order, no bonus in play
+
+    preferred = await router.route(step, preferred_fallback_providers=frozenset({"provider_b"}))
+    assert preferred.agent_id == agent_b_id
+    assert "fallback preferido" in preferred.reason
+
+
+async def test_fallback_preference_bonus_is_absent_by_default() -> None:
+    router, agent_a_id, _agent_b_id = _fallback_preference_setup()
+    decision = await router.route(_step("testing"))
+    assert "fallback preferido" not in decision.reason
+    assert decision.agent_id == agent_a_id

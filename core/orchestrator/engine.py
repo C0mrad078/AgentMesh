@@ -45,6 +45,7 @@ from core.orchestrator.events import EventSink, ExecutionEvent, noop_sink
 from core.orchestrator.executor import StepExecutor
 from core.orchestrator.intent_analyzer import IntentAnalyzer
 from core.orchestrator.judge import Judge
+from core.orchestrator.meeting_manager import MeetingManager
 from core.orchestrator.models import (
     PHASE_LABELS,
     ExecutionPhase,
@@ -61,6 +62,8 @@ from core.orchestrator.planner import Planner
 from core.orchestrator.router import Router
 from core.orchestrator.verifier import Verifier
 from core.projects.service import ProjectService
+from core.providers.base import ProviderHealthStatus
+from core.providers.health import ProviderHealthMonitor
 from core.providers.pool import ProviderPool
 from core.tasks.models import TERMINAL_TASK_STATUSES, Task, TaskStatus
 from core.tasks.service import TaskService
@@ -101,6 +104,7 @@ class ExecutionEngine:
         max_review_iterations: int = 3,
         context_metrics_repo: ContextMetricsRepository | None = None,
         post_execution_pipeline: PostExecutionPipeline | None = None,
+        health_monitor: ProviderHealthMonitor | None = None,
     ) -> None:
         self._executions_repo = executions_repo
         self._steps_repo = steps_repo
@@ -123,6 +127,8 @@ class ExecutionEngine:
         self.max_review_iterations = max_review_iterations
         self._context_metrics_repo = context_metrics_repo
         self._post_execution = post_execution_pipeline
+        self._health = health_monitor
+        self._meetings = MeetingManager(event_bus)
         self._cancel_events: dict[str, asyncio.Event] = {}
         self._pending_reflections: set[asyncio.Task] = set()
 
@@ -391,6 +397,12 @@ class ExecutionEngine:
 
             indices = list(range(step_index, step_index + len(layer)))
             step_index += len(layer)
+
+            meeting_participants = self._meetings.participants_for(task.mode, layer, routes)
+            if meeting_participants:
+                await self._meetings.meeting_created(execution_id, task.id, meeting_participants)
+                await self._meetings.meeting_started(execution_id, task.id, meeting_participants)
+
             step_results = await asyncio.gather(*[
                 self._run_single_step(
                     execution_id, task, plan, step, routes, results_by_id, workspace_path,
@@ -398,6 +410,10 @@ class ExecutionEngine:
                 )
                 for step, idx in zip(layer, indices, strict=True)
             ])
+
+            if meeting_participants:
+                await self._meetings.meeting_completed(execution_id, task.id, meeting_participants)
+
             for step, result in zip(layer, step_results, strict=True):
                 results_by_id[step.id] = result
                 if result.status in (StepStatus.FAILED, StepStatus.CANCELLED):
@@ -600,14 +616,48 @@ class ExecutionEngine:
         gate_failures = [c for c in verification.checks if not c.passed and not c.name.startswith("step:")]
 
         base_step = next((s for s in plan.steps if s.id in failing_step_ids), plan.steps[-1])
-        routing = routes.get(base_step.id)
-        if routing is None:
+        previous_routing = routes.get(base_step.id)
+        routing = previous_routing
+        # Stage 3, spec section 44/45: a correction normally goes back to
+        # the *same* agent to fix their own work (spec section 52's repair
+        # loop). Re-route to a different agent only when that agent's own
+        # provider is currently unavailable -- never just because the code
+        # itself was wrong, which is not a provider problem and not a
+        # reason to hand the fix to someone else.
+        healthy_statuses = (ProviderHealthStatus.ONLINE, ProviderHealthStatus.UNKNOWN)
+        needs_reroute = routing is None or (
+            self._health is not None and self._health.status_of(routing.provider) not in healthy_statuses
+        )
+        if needs_reroute:
             try:
+                exclude = frozenset({previous_routing.agent_id}) if previous_routing else frozenset()
+                previous_agent = self._agents.get(previous_routing.agent_id) if previous_routing else None
+                preferred_fallback_providers = (
+                    frozenset(previous_agent.fallback_providers) if previous_agent else frozenset()
+                )
                 routing = await self._router.route(
-                    base_step, risk=plan.intent.risk, project_id=task.project_id
+                    base_step, risk=plan.intent.risk, project_id=task.project_id, exclude_agent_ids=exclude,
+                    preferred_fallback_providers=preferred_fallback_providers,
                 )
             except NotFoundError:
-                return results, step_index
+                if previous_routing is None:
+                    return results, step_index
+                routing = previous_routing  # no healthy alternative -- retry with the original anyway
+
+        # `needs_reroute` is True whenever `routing` (== `previous_routing`)
+        # started out None, and every path through the block above either
+        # returns early or reassigns `routing` to a real `RoutingDecision`
+        # -- so it can never still be None here. Asserted rather than left
+        # implicit so the type checker can see the same invariant.
+        assert routing is not None
+        if previous_routing is not None and routing.agent_id != previous_routing.agent_id:
+            await self._events.publish(OrchestrationEvent(
+                type=EventType.FALLBACK_USED, execution_id=execution_id, task_id=task.id,
+                payload={
+                    "step_id": base_step.id, "from_agent_id": previous_routing.agent_id,
+                    "to_agent_id": routing.agent_id, "reason": "provider_unavailable",
+                },
+            ))
 
         description_lines = [f"Correct the following issues found during verification (round {iteration}):"]
         for step_id in failing_step_ids:

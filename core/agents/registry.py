@@ -201,6 +201,8 @@ _STANDARD_AGENTS: list[Agent] = [
         permissions=AgentPermissions(
             can_read_files=True, can_write_files=True, can_run_git=True, can_run_terminal=True
         ),
+        preferred_provider="codex_cli",
+        fallback_providers=["claude_code_cli"],
     ),
     Agent(
         id="agent_claude_code_architect",
@@ -222,6 +224,8 @@ _STANDARD_AGENTS: list[Agent] = [
         permissions=AgentPermissions(
             can_read_files=True, can_write_files=True, can_run_git=True, can_run_terminal=True
         ),
+        preferred_provider="claude_code_cli",
+        fallback_providers=["codex_cli"],
     ),
 ]
 

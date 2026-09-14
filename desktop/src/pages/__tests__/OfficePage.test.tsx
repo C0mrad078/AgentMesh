@@ -1,97 +1,103 @@
-import { forwardRef } from "react";
+import { forwardRef, useImperativeHandle } from "react";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+import type { PhaserOfficeHandle } from "@/components/PhaserOffice";
+import type { AgentInspectInfo, OfficeSummary } from "@/game/scenes/OfficeScene";
+
+const codexInfo: AgentInspectInfo = {
+  id: "agent_codex", name: "Codex", roleLabel: "Frontend Developer", state: "CODING",
+  taskTitle: "Implement Provider Screen", provider: "codex_cli", progress: 0.5,
+  detail: "Implement Provider Screen", room: "Frontend Room", fallbackFrom: null,
+};
 
 // Phaser needs a real canvas/WebGL context jsdom does not provide -- the
-// canvas rendering itself is covered by `OfficeController`/`OfficeScene`
-// being exercised against the real Phaser API via typecheck, and by
+// canvas rendering itself is covered by game-system unit tests and by
 // manual verification in the running app. This test mocks the mount
-// component shallowly to verify the *page* wiring (stats, task board,
-// hover/click plumbing) around it. Wrapped in `forwardRef` since the real
-// component accepts a camera-control ref.
+// component shallowly to verify the *page* wiring (stats, hover/click,
+// Task Board navigation, Developer Mode debug panel).
 vi.mock("@/components/PhaserOffice", () => ({
   PhaserOffice: forwardRef(function MockPhaserOffice(
-    { onClickAgent, onInteractiveObjectClick }: {
+    { onClickAgent, onTaskBoardClick, onSummaryChange }: {
       onClickAgent: (id: string) => void;
-      onInteractiveObjectClick: (objectId: string) => void;
+      onTaskBoardClick: () => void;
+      onSummaryChange: (s: OfficeSummary) => void;
     },
-    _ref,
+    ref: React.Ref<PhaserOfficeHandle>,
   ) {
+    useImperativeHandle(ref, () => ({
+      zoomIn: vi.fn(), zoomOut: vi.fn(), fit: vi.fn(), reset: vi.fn(),
+      followAgent: vi.fn(), stopFollow: vi.fn(), toggleDebug: vi.fn(),
+      inspect: (id: string) => (id === "agent_codex" ? codexInfo : null),
+      listAgents: () => [codexInfo],
+    }));
     return (
       <>
-        <button onClick={() => onClickAgent("agent_1")}>mock-phaser-canvas</button>
-        <button onClick={() => onInteractiveObjectClick("task_board")}>mock-task-board-object</button>
+        <button onClick={() => onClickAgent("agent_codex")}>mock-click-codex</button>
+        <button onClick={() => onTaskBoardClick()}>mock-task-board</button>
+        <button onClick={() => onSummaryChange({ working: 1, meeting: 0, resting: 0, sleeping: 0, waiting: 0, error: 0, idle: 3 })}>
+          mock-summary
+        </button>
       </>
     );
   }),
 }));
 
-import { OfficePage } from "@/pages/OfficePage";
-import { useOfficeStore } from "@/stores/officeStore";
-import { useUiStore } from "@/stores/uiStore";
-import type { VirtualAgent } from "@/office/types";
+vi.mock("@/game/simulation/OfficeSimulationService", () => ({
+  officeSimulationService: {
+    startWorkday: vi.fn(), startPlanningMeeting: vi.fn(), endMeeting: vi.fn(),
+    rateLimitShort: vi.fn(), rateLimitLong: vi.fn(), recover: vi.fn(),
+    sendToTesting: vi.fn(), triggerError: vi.fn(), completeTask: vi.fn(), resetOffice: vi.fn(),
+  },
+}));
 
-function makeVirtualAgent(overrides: Partial<VirtualAgent> = {}): VirtualAgent {
-  return {
-    id: "agent_1", name: "Agent One", role: "Dev", provider: "openai", model: "gpt",
-    homeRoom: "backend_desk", state: "WORKING", currentTaskId: "task_1", currentStepId: "estep_1",
-    currentExecutionId: "exec_1", destination: "backend_desk", statusDetail: "Implementing feature",
-    progress: null, lastActivityAt: null, retryAt: null,
-    ...overrides,
-  };
-}
+import { OfficePage } from "@/pages/OfficePage";
+import { useUiStore } from "@/stores/uiStore";
+import { officeSimulationService } from "@/game/simulation/OfficeSimulationService";
 
 describe("OfficePage", () => {
-  it("shows real roster stats derived from the office store", () => {
-    useOfficeStore.setState({
-      agents: {
-        agent_1: makeVirtualAgent(),
-        agent_2: makeVirtualAgent({ id: "agent_2", state: "OFFLINE" }),
-      },
-      meetings: [], steps: [], loaded: true, error: null,
-    });
-
+  it("shows real roster stats derived from the state machine summary, never a fabricated count", async () => {
     render(<OfficePage />);
+    expect(screen.getByText("0 trabalhando")).toBeInTheDocument();
 
-    expect(screen.getByText("1 agentes online")).toBeInTheDocument();
+    await userEvent.click(screen.getByText("mock-summary"));
     expect(screen.getByText("1 trabalhando")).toBeInTheDocument();
   });
 
-  it("shows a real error message when the office failed to load", () => {
-    useOfficeStore.setState({ agents: {}, meetings: [], steps: [], loaded: true, error: "bridge unavailable" });
-
+  it("opens the read-only agent inspector when the canvas reports a click", async () => {
     render(<OfficePage />);
+    await userEvent.click(screen.getByText("mock-click-codex"));
 
-    expect(screen.getByText(/bridge unavailable/)).toBeInTheDocument();
+    expect(await screen.findByText("Codex")).toBeInTheDocument();
+    expect(screen.getByText("Implement Provider Screen")).toBeInTheDocument();
   });
 
-  it("opens the agent detail panel when the canvas reports a click", async () => {
-    useOfficeStore.setState({
-      agents: { agent_1: makeVirtualAgent() }, meetings: [], steps: [], loaded: true, error: null,
-    });
-
-    render(<OfficePage />);
-    await userEvent.click(screen.getByText("mock-phaser-canvas"));
-
-    expect(await screen.findByText("Agent One")).toBeInTheDocument();
-  });
-
-  it("shows the empty-state message on the task board with no active steps", () => {
-    useOfficeStore.setState({ agents: {}, meetings: [], steps: [], loaded: true, error: null });
-
-    render(<OfficePage />);
-
-    expect(screen.getByText(/Nenhuma tarefa em andamento/)).toBeInTheDocument();
-  });
-
-  it("clicking the in-canvas Task Board object navigates to the real Tasks page, never a fake panel", async () => {
+  it("clicking the in-world Task Board navigates to the real Tasks page", async () => {
     useUiStore.setState({ activePage: "office" });
-    useOfficeStore.setState({ agents: {}, meetings: [], steps: [], loaded: true, error: null });
-
     render(<OfficePage />);
-    await userEvent.click(screen.getByText("mock-task-board-object"));
+
+    await userEvent.click(screen.getByText("mock-task-board"));
 
     expect(useUiStore.getState().activePage).toBe("workspace");
+  });
+
+  it("Developer Mode is hidden by default and its debug buttons route to OfficeSimulationService", async () => {
+    render(<OfficePage />);
+    expect(screen.queryByText("Start Workday")).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Alternar Developer Mode" }));
+    expect(screen.getByText("Start Workday")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByText("Start Workday"));
+    expect(officeSimulationService.startWorkday).toHaveBeenCalled();
+
+    await userEvent.click(screen.getByText("Rate Limit Codex"));
+    expect(officeSimulationService.rateLimitShort).toHaveBeenCalledWith("agent_codex", "codex_cli");
+
+    await userEvent.click(screen.getByText("Long Cooldown Claude"));
+    expect(officeSimulationService.rateLimitLong).toHaveBeenCalledWith("agent_claude_code", "claude_code_cli");
+
+    await userEvent.click(screen.getByText("Reset Office"));
+    expect(officeSimulationService.resetOffice).toHaveBeenCalled();
   });
 });

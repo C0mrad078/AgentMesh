@@ -1,5 +1,5 @@
 import type { Session, Task } from '@/types';
-export type MissionStatus = 'draft' | 'analyzing' | 'planned' | 'awaiting_approval' | 'running' | 'reviewing' | 'changes_requested' | 'testing' | 'blocked' | 'completed' | 'failed' | 'cancelled';
+export type MissionStatus = 'draft' | 'analyzing' | 'planned' | 'awaiting_approval' | 'awaiting_human_approval' | 'running' | 'reviewing' | 'changes_requested' | 'testing' | 'blocked' | 'completed' | 'failed' | 'cancelled';
 export interface Mission { schema_version: 1; id: string; project_id: string; request: string; status: MissionStatus; reason: string; current_plan_id: string | null; result: string; created_at: string; updated_at: string }
 export interface Choice { agent_id: string; role: 'leader' | 'worker' | 'reviewer'; reason: string }
 export interface MissionPlan { id: string; version: number; summary: string; leader_session_id: string; choices: Choice[]; tasks: { key: string; title: string; description: string; depends_on: string[]; acceptance: string[] }[]; limitations: string[] }
@@ -9,8 +9,13 @@ export interface AgentMessage { id: string; mission_id: string; task_id: string 
 export interface Artifact { id: string; task_id: string | null; session_id: string | null; kind: 'diff' | 'report' | 'test' | 'decision' | 'log'; title: string; content: string; paths: string[]; command: string[]; exit_code: number | null }
 export interface Review { id: string; task_id: string; reviewer_session_id: string; worker_session_id: string; verdict: 'approval' | 'changes_requested' | 'human_input_required'; justification: string; challenges: string[]; round: number }
 export interface Instruction { id: string; content: string; disposition: 'pending' | 'context_share' | 'replan' | 'queued'; reason: string }
+export interface WorktreeLease { id: string; mission_id: string; task_id: string; session_id: string | null; project_id: string; workspace_root: string; path: string; branch_name: string; base_sha: string; head_sha: string | null; status: string; created_at: string; updated_at: string; last_error: string }
+export interface ConflictForecast { id: string; mission_id: string; task_id: string; other_task_id: string | null; level: 'none' | 'possible' | 'likely' | 'confirmed'; paths: string[]; reason: string; created_at: string }
+export interface IntegrationAttempt { id: string; mission_id: string; task_id: string; integration_branch: string; source_branch: string; base_sha: string; result: string; commit_sha: string | null; message: string; created_at: string }
+export interface QualityGateRun { id: string; mission_id: string; task_id: string | null; name: string; command: string[]; exit_code: number; duration_ms: number; summary: string; passed: boolean; created_at: string }
+export interface HumanApproval { id: string; mission_id: string; decision: string; rationale: string; created_at: string }
 export interface MissionEvent { schema_version: 1; sequence: number; mission_id: string; entity_type: string; entity_id: string; timestamp: string; record: Mission | MissionPlan | Assignment | AgentMessage | Artifact | Review | Instruction | { schema_version: 1; status: string } }
-export interface MissionSnapshot { schema_version: 1; mission: Mission; plans: MissionPlan[]; tasks: Task[]; sessions: Session[]; assignments: Assignment[]; messages: AgentMessage[]; artifacts: Artifact[]; reviews: Review[]; instructions: Instruction[]; events: MissionEvent[] }
+export interface MissionSnapshot { schema_version: 1; mission: Mission; plans: MissionPlan[]; tasks: Task[]; sessions: Session[]; assignments: Assignment[]; messages: AgentMessage[]; artifacts: Artifact[]; reviews: Review[]; instructions: Instruction[]; events: MissionEvent[]; worktrees?: WorktreeLease[]; forecasts?: ConflictForecast[]; integrations?: IntegrationAttempt[]; quality_gates?: QualityGateRun[]; approvals?: HumanApproval[] }
 export type MissionAction = 'analyze' | 'start' | 'pause' | 'cancel' | 'resume' | 'instruction' | 'include_agent' | 'reassign' | 'approve';
 export interface CommandInput { action: MissionAction; content?: string; session_id?: string; task_id?: string; agent_id?: string }
 export function isMissionEvent(value: unknown): value is MissionEvent {

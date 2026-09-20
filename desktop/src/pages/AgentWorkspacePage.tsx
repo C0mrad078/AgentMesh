@@ -122,7 +122,7 @@ export function AgentWorkspacePage() {
               {mission?.reason && <p>{mission.reason}</p>}
               {mission && <div className="workspace-actions">
                 <Button size="sm" disabled={!!active || store.sending} onClick={() => act({ action: 'analyze' })}>Analisar / replanejar</Button>
-                <Button size="sm" disabled={!mission.current_plan_id || mission.status === 'awaiting_approval' || !!active || store.sending || ['completed', 'cancelled', 'failed'].includes(mission.status)} onClick={() => act({ action: mission.status === 'blocked' ? 'resume' : 'start' })}>{mission.status === 'blocked' ? 'Retomar' : 'Iniciar missão'}</Button>
+                <Button size="sm" disabled={!mission.current_plan_id || mission.status === 'awaiting_approval' || mission.status === 'awaiting_human_approval' || !!active || store.sending || ['completed', 'cancelled', 'failed'].includes(mission.status)} onClick={() => act({ action: mission.status === 'blocked' ? 'resume' : 'start' })}>{mission.status === 'blocked' ? 'Retomar' : 'Iniciar missão'}</Button>
                 <Button size="sm" variant="outline" disabled={!active || store.sending} onClick={() => act({ action: 'pause' })}>Pausar</Button>
                 <Button size="sm" variant="outline" disabled={store.sending || ['completed', 'cancelled', 'failed'].includes(mission.status)} onClick={() => act({ action: 'cancel' })}>Cancelar</Button>
               </div>}
@@ -140,6 +140,13 @@ export function AgentWorkspacePage() {
               {snapshot.plans.at(-1)?.tasks.map(t => <p key={t.key}>{t.title}: {t.acceptance.join('; ')}</p>)}
             </details> : null}
             {mission?.result && <article className="mission-result"><h2>Resultado consolidado</h2><pre>{mission.result}</pre></article>}
+            {snapshot && (snapshot.worktrees?.length || snapshot.forecasts?.length || snapshot.integrations?.length || snapshot.quality_gates?.length) ? <details className="workspace-plan" open>
+              <summary>Execução paralela e integração</summary>
+              {snapshot.worktrees?.map(w => <p key={w.id}><strong>{w.branch_name}</strong> · {w.status} · base {w.base_sha.slice(0, 8)}{w.head_sha ? ` → ${w.head_sha.slice(0, 8)}` : ''}</p>)}
+              {snapshot.forecasts?.map(f => <p key={f.id}>Conflito {f.level}: {f.reason}{f.paths.length ? ` (${f.paths.join(', ')})` : ''}</p>)}
+              {snapshot.integrations?.map(i => <p key={i.id}>Integração {i.result}: {i.source_branch} → {i.integration_branch}{i.commit_sha ? ` (${i.commit_sha.slice(0, 8)})` : ''}</p>)}
+              {snapshot.quality_gates?.map(g => <p key={g.id}>Quality gate {g.name}: {g.passed ? 'aprovado' : `falhou (exit ${g.exit_code})`}</p>)}
+            </details> : null}
           </main>
           <aside className="workspace-details" aria-label="Detalhes e conversa">
             <h2>{selection?.kind ?? 'Missão'} · detalhes</h2>
@@ -163,7 +170,7 @@ export function AgentWorkspacePage() {
               <label>Tarefa<select aria-label="Tarefa para reatribuição" value={selectedTask} onChange={e => setSelectedTask(e.target.value)}><option value="">Selecione</option>{snapshot?.tasks.map(t => <option key={t.id} value={t.id}>{t.title}</option>)}</select></label>
               <Button size="sm" disabled={!!active || !selectedAgent || store.sending} onClick={() => act({ action: 'include_agent', agent_id: selectedAgent })}>Incluir agente</Button>
               <Button size="sm" disabled={!!active || !selectedAgent || !selectedTask || store.sending} onClick={() => act({ action: 'reassign', agent_id: selectedAgent, task_id: selectedTask })}>Reatribuir tarefa</Button>
-              <Button size="sm" disabled={!['blocked', 'awaiting_approval'].includes(mission.status) || !draft.trim() || store.sending} onClick={() => act({ action: 'approve', content: draft })}>Registrar decisão e retomar</Button>
+              <Button size="sm" disabled={!['blocked', 'awaiting_approval', 'awaiting_human_approval'].includes(mission.status) || !draft.trim() || store.sending} onClick={() => act({ action: 'approve', content: draft })}>{mission.status === 'awaiting_human_approval' ? 'Aprovar entrega' : 'Registrar decisão e retomar'}</Button>
               <small>Pause antes de alterar atribuições. Decisões usam o texto do campo abaixo.</small>
             </details>}
           </aside>

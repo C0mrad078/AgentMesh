@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, TypeVar
 
@@ -39,6 +40,10 @@ from core.missions.models import (
 from core.missions.runtime import PROVIDER_IDS, MissionRuntime
 from core.missions.selection import choose_agent
 from core.orchestrator.event_bus import EventType, OrchestrationEvent
+from core.parallel.concurrency import ParallelConcurrency
+from core.parallel.forecast import forecast
+from core.parallel.models import ConcurrencyLease, HumanApproval, IntegrationAttempt, QualityGateRun
+from core.parallel.worktrees import WorktreeManager
 from core.runtime.execution_backend import ExecutionBackendType
 from core.security.secret_scanner import SecretScanner
 from core.sessions.models import Session, SessionCreate, SessionStatus
@@ -81,6 +86,9 @@ class MissionService:
         self.workspace_gate = asyncio.Lock()
         self._agents_in_flight: set[str] = set()
         self.legacy_workspaces: set[str] = set()
+        self.parallel = ParallelConcurrency()
+        self.worktrees = WorktreeManager(ctx.parallel_repo)
+        self.review_gate = asyncio.Lock()
 
     def clean(self, text: str) -> str:
         return SecretScanner().redact(text)[0]
@@ -145,6 +153,23 @@ class MissionService:
                 await self.repo.belongs('session', mid, cmd.session_id)
             await self.stop(mid, pause=cmd.action == 'pause', session_id=cmd.session_id)
             return
+        if cmd.action == 'approve' and mission.status == 'awaiting_human_approval':
+            if not cmd.content.strip():
+                raise ValidationError('A aprovação humana precisa de uma justificativa.')
+            await self.ctx.parallel_repo.add_approval(HumanApproval(
+                id=new_id('approval'), mission_id=mid, decision='approved',
+                rationale=self.clean(cmd.content), created_at=utc_now()))
+            await self.status(mid, 'completed', 'Entrega aprovada para integração manual futura.')
+            return
+        if cmd.action == 'approve' and mission.status == 'awaiting_approval':
+            if not cmd.content.strip():
+                raise ValidationError('A decisão humana precisa de uma justificativa.')
+            await self.ctx.parallel_repo.add_approval(HumanApproval(
+                id=new_id('approval'), mission_id=mid, decision='approved',
+                rationale=self.clean(cmd.content), created_at=utc_now()))
+            await self.status(mid, 'changes_requested', self.clean(cmd.content))
+            self.launch(mid, analyze=False)
+            return
         if mission.status in TERMINAL:
             raise ValidationError('Missão encerrada')
         if cmd.action in ('include_agent', 'reassign'):
@@ -179,15 +204,13 @@ class MissionService:
             if mission.status not in ('draft', 'blocked', 'planned', 'awaiting_approval'):
                 raise ValidationError('Missão não pode ser analisada neste estado')
             self.launch(mid, analyze=True)
-        elif cmd.action in ('start', 'resume', 'approve'):
+        elif cmd.action in ('start', 'resume'):
             if not mission.current_plan_id:
                 raise ValidationError('Analise o pedido antes de iniciar')
             if mission.status not in ('planned', 'awaiting_approval', 'blocked'):
                 raise ValidationError('Missão não pode iniciar neste estado')
             if mission.status == 'awaiting_approval' and cmd.action != 'approve':
                 raise ValidationError('Registre uma decisão humana explícita antes de retomar.')
-            if cmd.action == 'approve' and not cmd.content.strip():
-                raise ValidationError('Explique a decisão humana antes de retomar')
             if cmd.content.strip():
                 await self.repo.put(Instruction(id=new_id('instruction'), mission_id=mid,
                     content=self.clean(cmd.content), created_at=utc_now()))
@@ -246,6 +269,7 @@ class MissionService:
             await self.status(mid, 'blocked', self.clean(str(exc))[:4000] or type(exc).__name__)
         finally:
             await self.repo.release(mid)
+            await self.ctx.parallel_repo.release(mission_id=mid)
             self.jobs.pop(mid, None)
             self.cancel_events.pop(mid, None)
             await self.notify(mid)
@@ -263,7 +287,8 @@ class MissionService:
             project_id=mission.project_id, excluded=excluded or set(), busy=await self.busy(mission.id),
             required=required)
 
-    async def new_session(self, mission: Mission, choice: Choice, task_id: str | None = None) -> Session:
+    async def new_session(self, mission: Mission, choice: Choice, task_id: str | None = None,
+                          *, workspace: str | None = None, isolation: str = "main") -> Session:
         agent = await self.ctx.agents_repo.get(choice.agent_id)
         if agent is None:
             raise MissionBlocked('Agente removido')
@@ -274,7 +299,7 @@ class MissionService:
             agent_id=agent.id, project_id=mission.project_id, provider_id=provider.id,
             backend_type=ExecutionBackendType.SUBSCRIPTION, task_id=task_id,
             metadata={'schema_version': 1, 'mission_id': mission.id, 'role': choice.role,
-                      'workspace': await self.workspace(mission)}))
+                      'workspace': workspace or await self.workspace(mission), 'isolation': isolation}))
         await self.repo.link('session', mission.id, session.id)
         await self.repo.put(Assignment(id=new_id('assignment'), mission_id=mission.id,
             task_id=task_id, agent_id=agent.id, session_id=session.id, role=choice.role,
@@ -382,8 +407,13 @@ class MissionService:
         try:
             # Refresh the external id: later turns resume this exact session.
             session = await self.repo.sessions.get_or_raise(session.id)
-            call = asyncio.create_task(self.runtime.execute(session, agent, prompt,
-                workspace=await self.workspace(mission), writable=writable, timeout=self.session_timeout))
+            workspace = str(session.metadata.get('workspace') or await self.workspace(mission))
+            async def run_provider():
+                async with self.parallel.acquire(provider=agent.provider,
+                                                 project_id=mission.project_id, mission_id=mid):
+                    return await self.runtime.execute(session, agent, prompt,
+                        workspace=workspace, writable=writable, timeout=self.session_timeout)
+            call = asyncio.create_task(run_provider())
             cancel_wait = asyncio.create_task(cancel.wait()) if cancel else None
             try:
                 waiting = [call, cancel_wait] if cancel_wait else [call]
@@ -469,6 +499,9 @@ class MissionService:
         leader = await self.repo.sessions.get_or_raise(plan.leader_session_id)
         await self.status(mid, 'running')
         await self.process_instructions(mid, leader)
+        if len(plan.tasks) >= 2 and any(t.isolation == "write" for t in plan.tasks):
+            await self.run_parallel(mission, plan, leader)
+            return
         snapshot = await self.repo.snapshot(mid)
         existing = {str(t.input.get('plan_key')): t for t in snapshot.tasks
                     if t.input.get('plan_id') == plan.id}
@@ -507,6 +540,181 @@ class MissionService:
             if session.status == SessionStatus.WAITING:
                 await self.repo.sessions.update_status(session.id, SessionStatus.COMPLETED, finished=True)
         await self.status(mid, 'completed', result=result)
+
+    async def run_parallel(self, mission: Mission, plan: MissionPlan, leader: Session) -> None:
+        """Run independent write tasks in isolated worktrees, then integrate only reviewed commits."""
+        mid = mission.id
+        workspace = Path(await self.workspace(mission))
+        base_sha = await self.worktrees.base_sha(workspace)
+        pending = {task.key: task for task in plan.tasks}
+        completed: set[str] = set()
+        # The scheduler admits every currently-ready task at once; dependencies are
+        # still enforced in deterministic waves.
+        while pending:
+            ready = sorted(k for k, task in pending.items() if set(task.depends_on) <= completed)
+            if not ready:
+                raise MissionBlocked("Grafo paralelo não possui tarefa pronta; dependência inválida.")
+            choices: dict[str, Choice] = {}
+            reserved = {leader.agent_id}
+            for key in ready:
+                choices[key] = await self.choose(mission, 'worker', reserved, pending[key].capabilities)
+                reserved.add(choices[key].agent_id)
+            reviewer_choice = await self.choose(mission, 'reviewer', reserved)
+            await asyncio.gather(*(self.run_parallel_task(
+                mission, plan, leader, pending[key], workspace, base_sha, choices[key], reviewer_choice) for key in ready))
+            completed.update(ready)
+            for key in ready:
+                del pending[key]
+        task_snapshot = await self.repo.snapshot(mid)
+        task_ids = {str(task.input.get('plan_key')): task.id for task in task_snapshot.tasks}
+        forecasts = [value.model_copy(update={
+            'task_id': task_ids[value.task_id],
+            'other_task_id': task_ids.get(value.other_task_id) if value.other_task_id else None,
+        }) for value in forecast(mid, plan.tasks) if value.task_id in task_ids]
+        await self.ctx.parallel_repo.replace_forecasts(mid, forecasts)
+        await self.integrate_parallel(mission, plan, workspace, base_sha)
+
+    async def run_parallel_task(self, mission: Mission, plan: MissionPlan, leader: Session,
+                                planned, project_root: Path, base_sha: str, worker_choice: Choice,
+                                reviewer_choice: Choice) -> None:
+        mid = mission.id
+        task = await self.repo.tasks.create(TaskCreate(
+            project_id=mission.project_id, title=planned.title, description=planned.description,
+            input={'mission_id': mid, 'plan_id': plan.id, 'plan_key': planned.key,
+                   'isolation': planned.isolation, 'expected_paths': planned.expected_paths,
+                   'validation_commands': planned.validation_commands}))
+        await self.repo.link('task', mid, task.id)
+        selected_agent = await self.ctx.agents_repo.get(worker_choice.agent_id)
+        lease = ConcurrencyLease(
+            id=new_id('lease'), mission_id=mid, task_id=task.id, project_id=mission.project_id,
+            provider=selected_agent.provider if selected_agent else 'unknown',
+            expires_at=utc_now() + timedelta(minutes=30), created_at=utc_now())
+        admitted = await self.ctx.parallel_repo.acquire(lease, limits={
+            'global': self.parallel.limits.global_sessions,
+            'provider': self.parallel.limits.per_provider,
+            'project': self.parallel.limits.per_project,
+            'mission': self.parallel.limits.per_mission,
+        })
+        if not admitted:
+            raise MissionBlocked(f'Limite de concorrência atingido para a task {planned.key}.')
+        worker = await self.new_session(mission, worker_choice, task.id)
+        branch = f"agentmash/mission-{mid}/task-{task.id}"
+        wt = await self.worktrees.create(mission=mission, task_id=task.id, project_root=project_root,
+                                          base_sha=base_sha, branch_name=branch)
+        await self.ctx.parallel_repo.update_worktree(wt.id, session_id=worker.id)
+        await self.repo.sessions.assign_worktree(worker.id, wt.id)
+        await self.repo.sessions.merge_metadata(worker.id, {'workspace': wt.path, 'isolation': 'worktree',
+                                                             'worktree_id': wt.id, 'base_sha': base_sha,
+                                                             'branch': branch})
+        await self.repo.tasks.update_status(task.id, TaskStatus.RUNNING)
+        await self.message(mid, leader.id, worker.id, 'handoff',
+            f"Implementação isolada na branch {branch}. {planned.description}\nCritérios: {planned.acceptance}", task.id)
+        baseline = await asyncio.to_thread(snapshot_files, wt.path)
+        await self.artifact(mid, 'decision', 'Baseline da tarefa',
+                            f'Base SHA: {base_sha}; branch: {branch}', worker.id, task.id, files=baseline)
+        for round_number in range(1, self.max_review_rounds + 1):
+            output = await self.turn(mission.id, worker, (
+                f"Implemente na sua worktree isolada: {planned.description}\n"
+                f"Critérios: {planned.acceptance}\nNão altere a main nem outra worktree. "
+                "Descreva os arquivos e testes no JSON."), WorkerOutput, writable=planned.isolation == 'write')
+            if output.human_input_required:
+                raise HumanInputRequired(output.human_input_required)
+            head_sha = await self.worktrees.commit(wt, f"AgentMash: {planned.title}")
+            wt = wt.model_copy(update={'head_sha': head_sha})
+            await self.artifact(mid, 'report', 'Entrega isolada', output.summary, worker.id, task.id,
+                                paths=output.files)
+            diff = await self.capture_diff_at(mission, task.id, worker.id, wt.path, baseline)
+            reviewer = await self.new_session(mission, reviewer_choice, task.id, workspace=wt.path, isolation='review')
+            async with self.review_gate:
+                review = await self.turn(mission.id, reviewer,
+                    f"Revise independentemente a task {planned.title}. Base SHA {base_sha}; head SHA {head_sha}. "
+                    f"Critérios: {planned.acceptance}. Diff/evidência:\n{diff.content}", ReviewOutput)
+            review_row = Review(**review.model_dump(), id=new_id('review'), mission_id=mid,
+                task_id=task.id, worker_session_id=worker.id, reviewer_session_id=reviewer.id,
+                round=round_number, created_at=utc_now())
+            await self.repo.put(review_row)
+            await self.message(mid, reviewer.id, worker.id, review.verdict, review.justification, task.id)
+            if review.verdict == 'approval':
+                await self.repo.tasks.update_status(task.id, TaskStatus.COMPLETED,
+                    result={'review_id': review_row.id, 'head_sha': head_sha},
+                    completed_at=utc_now().isoformat())
+                await self.repo.sessions.update_status(worker.id, SessionStatus.COMPLETED, finished=True)
+                await self.repo.sessions.update_status(reviewer.id, SessionStatus.COMPLETED, finished=True)
+                await self.ctx.parallel_repo.update_worktree(wt.id, status='active', head_sha=head_sha)
+                return
+            if review.verdict == 'human_input_required':
+                raise HumanInputRequired(review.justification)
+            await self.repo.tasks.update_status(task.id, TaskStatus.WAITING)
+        raise MissionBlocked(f"Limite de revisões atingido para {planned.key}.")
+
+    async def capture_diff_at(self, mission: Mission, task_id: str, session_id: str,
+                              path: str, baseline) -> Artifact:
+        git = GitTool(path)
+        status, diff = await asyncio.gather(git.status(), git.diff())
+        after = await asyncio.to_thread(snapshot_files, path)
+        evidence, paths = describe_changes(baseline, after)
+        return await self.artifact(mission.id, 'diff', 'Diff isolado',
+            evidence + "\n" + status.stdout + "\n" + diff.stdout, session_id, task_id, paths)
+
+    async def integrate_parallel(self, mission: Mission, plan: MissionPlan,
+                                 project_root: Path, base_sha: str) -> None:
+        mid = mission.id
+        integration_branch = f"agentmash/mission-{mid}/integration"
+        integration_root = self.worktrees.root_for(project_root) / "integration"
+        if integration_root.exists():
+            raise MissionBlocked("Worktree de integração existente requer recuperação humana.")
+        integration_root.parent.mkdir(parents=True, exist_ok=True)
+        created = await self.worktrees.git(project_root, ["worktree", "add", "-b", integration_branch,
+                                                            str(integration_root), base_sha])
+        if not created.success:
+            raise MissionBlocked("Não foi possível criar a worktree de integração: " + created.stderr[:800])
+        try:
+            snapshot = await self.repo.snapshot(mid)
+            tasks = sorted(snapshot.tasks, key=lambda t: str(t.input.get('plan_key', t.id)))
+            for task in tasks:
+                wt = await self.ctx.parallel_repo.worktree_for_task(mid, task.id)
+                if wt is None or task.status != TaskStatus.COMPLETED:
+                    raise MissionBlocked("Só tasks aprovadas podem ser integradas.")
+                ok, commit_sha, error = await self.worktrees.integrate(
+                    worktree=wt, integration_root=integration_root, integration_branch=integration_branch)
+                await self.ctx.parallel_repo.add_integration(IntegrationAttempt(
+                    id=new_id('integration'), mission_id=mid, task_id=task.id,
+                    integration_branch=integration_branch, source_branch=wt.branch_name,
+                    base_sha=base_sha, result='integrated' if ok else 'conflict',
+                    commit_sha=commit_sha or None, message=error, created_at=utc_now()))
+                if not ok:
+                    await self.status(mid, 'blocked', 'Conflito de integração requer agente integrador/humano: ' + error)
+                    return
+            gate = await self.run_quality_gate(mission, integration_root, None, 'post-integration tests')
+            if not gate.passed:
+                await self.status(mid, 'blocked', 'Quality gate pós-integração falhou.')
+                return
+            result = (f"Integration branch: {integration_branch}\nBase SHA: {base_sha}\n"
+                      f"Worktrees aprovadas: {len(tasks)}\nQuality gate: {gate.name} exit {gate.exit_code}\n"
+                      "A main permaneceu intocada. Aguardando aprovação humana antes de qualquer integração manual.")
+            await self.artifact(mid, 'report', 'IntegrationResult', result)
+            await self.status(mid, 'awaiting_human_approval', result=result)
+        finally:
+            # Keep the integration worktree for inspection; cleanup is explicit and safe.
+            pass
+
+    async def run_quality_gate(self, mission: Mission, root: Path, task_id: str | None,
+                               name: str) -> QualityGateRun:
+        planner = CommandPlanner(root)
+        command = planner.resolve(ProjectAction.RUN_TESTS)
+        if command is None:
+            raise MissionBlocked('Nenhum comando de testes reconhecido na integração.')
+        started = asyncio.get_running_loop().time()
+        result = await get_runner().run(command, cwd=root, timeout=self.session_timeout,
+                                         cancel_event=self.cancel_events.get(mission.id))
+        gate = QualityGateRun(id=new_id('gate'), mission_id=mission.id, task_id=task_id,
+            name=name, command=command, exit_code=result.returncode,
+            duration_ms=int((asyncio.get_running_loop().time() - started) * 1000),
+            summary=self.clean((result.stdout + '\n' + result.stderr)[:10000]),
+            passed=result.success, created_at=utc_now())
+        await self.ctx.parallel_repo.add_gate(gate)
+        await self.artifact(mission.id, 'test', name, gate.summary, command=command, exit_code=gate.exit_code)
+        return gate
 
     async def work_task(self, mission: Mission, plan: MissionPlan, leader: Session,
                         task_id: str, acceptance: list[str]) -> None:
@@ -645,6 +853,11 @@ class MissionService:
         for mission in await self.repo.missions():
             if mission.status in ACTIVE:
                 snapshot = await self.repo.snapshot(mission.id)
+                for worktree in await self.ctx.parallel_repo.list_worktrees(mission.id):
+                    state = await self.worktrees.inspect(worktree)
+                    if not state['exists']:
+                        await self.ctx.parallel_repo.update_worktree(
+                            worktree.id, status='orphaned', last_error='Diretório da worktree não existe após restart.')
                 for session in snapshot.sessions:
                     if session.status in (SessionStatus.STARTING, SessionStatus.WORKING, SessionStatus.WAITING):
                         await self.repo.sessions.update_status(session.id, SessionStatus.INTERRUPTED, finished=True)
@@ -654,6 +867,7 @@ class MissionService:
                 await self.status(mission.id, 'blocked',
                     'Aplicação reiniciada durante execução. Logs preservados; revise o diff e retome explicitamente.')
             await self.repo.release(mission.id)
+            await self.ctx.parallel_repo.release(mission_id=mission.id)
 
     async def close(self) -> None:
         for mid in list(self.jobs):

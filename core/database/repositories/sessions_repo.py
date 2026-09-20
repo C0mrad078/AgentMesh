@@ -103,6 +103,15 @@ class SessionsRepository:
         )
         return await self.get_or_raise(session_id)
 
+    async def assign_worktree(self, session_id: str, worktree_id: str) -> Session:
+        await self.get_or_raise(session_id)
+        now = utc_now().isoformat()
+        await self._db.execute(
+            "UPDATE sessions SET worktree_id = ?, updated_at = ? WHERE id = ?",
+            (worktree_id, now, session_id),
+        )
+        return await self.get_or_raise(session_id)
+
     async def merge_metadata(self, session_id: str, patch: dict[str, Any]) -> Session:
         current = await self.get_or_raise(session_id)
         merged = {**current.metadata, **patch}

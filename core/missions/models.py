@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -11,7 +11,7 @@ from core.sessions.models import Session
 from core.tasks.models import Task
 
 MissionStatus = Literal['draft', 'analyzing', 'planned', 'awaiting_approval', 'running',
-                        'reviewing', 'changes_requested', 'testing', 'blocked', 'completed',
+                        'awaiting_human_approval', 'reviewing', 'changes_requested', 'testing', 'blocked', 'completed',
                         'failed', 'cancelled']
 MessageType = Literal['question', 'answer', 'context_share', 'handoff', 'review_request',
                       'review_challenge', 'changes_requested', 'fix_response', 'approval',
@@ -31,6 +31,12 @@ class PlannedTask(Contract):
     capabilities: list[str] = Field(min_length=1, max_length=20)
     depends_on: list[str] = Field(default_factory=list)
     acceptance: list[str] = Field(min_length=1, max_length=20)
+    isolation: Literal["read_only", "write"] = "write"
+    expected_paths: list[str] = Field(default_factory=list, max_length=100)
+    validation_commands: list[list[str]] = Field(default_factory=list, max_length=10)
+    risk: Literal["low", "medium", "high", "critical"] = "medium"
+    review_policy: Literal["required", "optional"] = "required"
+    expected_artifacts: list[str] = Field(default_factory=list, max_length=20)
 
 
 class PlanOutput(Contract):
@@ -175,13 +181,19 @@ class StateEventRecord(Contract):
     status: str
 
 
+class ParallelEventRecord(Contract):
+    status: str
+    branch: str | None = None
+    head_sha: str | None = None
+
+
 class MissionEvent(Contract):
     sequence: int
     mission_id: str
     entity_type: str
     entity_id: str
     timestamp: datetime
-    record: Mission | MissionPlan | Assignment | AgentMessage | Artifact | Review | Instruction | StateEventRecord
+    record: Mission | MissionPlan | Assignment | AgentMessage | Artifact | Review | Instruction | StateEventRecord | ParallelEventRecord
 
 
 class MissionSnapshot(Contract):
@@ -195,6 +207,11 @@ class MissionSnapshot(Contract):
     reviews: list[Review]
     instructions: list[Instruction]
     events: list[MissionEvent]
+    worktrees: list[Any] = Field(default_factory=list)
+    forecasts: list[Any] = Field(default_factory=list)
+    integrations: list[Any] = Field(default_factory=list)
+    quality_gates: list[Any] = Field(default_factory=list)
+    approvals: list[Any] = Field(default_factory=list)
 
 
 class MissionCreate(Contract):

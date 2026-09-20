@@ -23,11 +23,17 @@ from core.providers.base import AIResponse, TokenUsage
 from core.security.secret_store import InMemorySecretStore
 from core.sessions.models import SessionStatus
 from core.utils.errors import CancelledErrorX, DatabaseError, ValidationError
+from core.utils.shell_runner import get_runner
 from pydantic import ValidationError as PydanticValidationError
 
 PLAN = {'summary': 'Implement a small change', 'tasks': [
     {'key': 'implementation', 'title': 'Implement', 'description': 'Implement requested change',
      'capabilities': ['coding'], 'acceptance': ['Tests pass']}], 'limitations': []}
+PARALLEL_PLAN = {'summary': 'Implement two independent changes', 'tasks': [
+    {'key': 'backend', 'title': 'Backend change', 'description': 'Implement the backend change',
+     'capabilities': ['coding'], 'acceptance': ['Tests pass'], 'expected_paths': ['backend.py']},
+    {'key': 'frontend', 'title': 'Frontend change', 'description': 'Implement the frontend change',
+     'capabilities': ['coding'], 'acceptance': ['Tests pass'], 'expected_paths': ['frontend.py']}], 'limitations': []}
 WORK = {'summary': 'Implemented', 'files': ['result.txt'], 'limitations': []}
 APPROVE = {'verdict': 'approval', 'justification': 'Inspected the implementation against criteria'}
 CHANGES = {'verdict': 'changes_requested', 'justification': 'Handle empty input',
@@ -78,6 +84,10 @@ async def mission_env(tmp_path):
     await get_runner().run(['git', 'init'], cwd=workspace)
     (workspace / 'pyproject.toml').write_text('[project]\nname="test-project"\nversion="0.1.0"\n')
     (workspace / 'test_example.py').write_text('def test_real_validation():\n    assert 2 + 2 == 4\n')
+    await get_runner().run(['git', 'config', 'user.email', 'test@example.invalid'], cwd=workspace)
+    await get_runner().run(['git', 'config', 'user.name', 'AgentMash Test'], cwd=workspace)
+    await get_runner().run(['git', 'add', '.'], cwd=workspace)
+    await get_runner().run(['git', 'commit', '-qm', 'fixture'], cwd=workspace)
     ctx = await build_context(tmp_path / 'missions.db', secret_store=InMemorySecretStore())
     project = await ctx.project_service.create_project(ProjectCreate(name='Project', workspace_path=str(workspace)))
     service = ctx.mission_service
@@ -120,6 +130,27 @@ async def test_full_mission_correction_and_real_tests(mission_env):
     assert 'arquivos' in result.mission.result.lower() or 'Arquivos' in result.mission.result
     assert len(result.events) == len({e.sequence for e in result.events})
     await ctx.db.execute('PRAGMA foreign_key_check')
+
+
+async def test_parallel_mission_uses_isolated_worktrees_and_human_gate(mission_env):
+    ctx, service, runtime, mission = mission_env
+    runtime.outputs = [PARALLEL_PLAN, WORK, WORK, CHANGES, APPROVE, WORK, APPROVE]
+    await action(service, mission, 'analyze')
+    await action(service, mission, 'start')
+    snap = await service.repo.snapshot(mission.id)
+    assert snap.mission.status == 'awaiting_human_approval', snap.mission.reason
+    assert len(snap.worktrees) == 2
+    assert len({w.path for w in snap.worktrees}) == 2
+    assert len({w.branch_name for w in snap.worktrees}) == 2
+    assert len(snap.integrations) == 2
+    assert snap.quality_gates and snap.quality_gates[-1].passed
+    assert any(r.verdict == 'changes_requested' for r in snap.reviews)
+    assert any(m.message_type == 'changes_requested' for m in snap.messages)
+    main_sha = (await get_runner().run(['git', 'rev-parse', 'HEAD'], cwd=Path(await service.workspace(mission)))).stdout.strip()
+    await action(service, mission, 'approve', content='Aprovado para integração manual futura.')
+    approved = await service.repo.get(type(mission), mission.id)
+    assert approved.status == 'completed'
+    assert (await get_runner().run(['git', 'rev-parse', 'HEAD'], cwd=Path(await service.workspace(mission)))).stdout.strip() == main_sha
 
 
 async def test_mission_restore_and_create_idempotency(mission_env):

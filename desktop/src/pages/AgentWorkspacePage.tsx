@@ -113,7 +113,7 @@ export function AgentWorkspacePage() {
             {snapshot?.instructions.map(i => <div className="queue-item" key={i.id}><strong>{i.content}</strong><span>{i.disposition}</span><small>{i.reason}</small></div>)}
             <h2>Agentes permanentes</h2>
             {agents.filter(a => a.active && (!a.project_id || a.project_id === pid)).map(a => <button className="queue-item" key={a.id} onClick={() => setSelection({ kind: 'agent', id: a.id })}>
-              {a.name}<small>{a.role || a.capabilities.map(c => c.name).join(' · ')} · {a.runtime_binding?.label ?? a.runtime_binding_id ?? a.provider}</small><span>{providers[a.provider]?.state ?? 'API / consulte Conexões'} · slots {a.slots_available ?? '—'}</span>
+              {a.name}<small>{a.role || a.capabilities.map(c => c.name).join(' · ')} · {a.runtime_binding?.label ?? a.runtime_binding_id ?? a.provider}</small><span>{providers[a.provider]?.state ?? 'API / consulte Conexões'}</span><small>slots {a.slots_available ?? '—'}</small>
             </button>)}
           </aside>
           <main className="workspace-center">

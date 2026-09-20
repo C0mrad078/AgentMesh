@@ -50,6 +50,7 @@ class Session(BaseModel):
     agent_id: str
     project_id: str
     provider_id: str
+    runtime_binding_id: str | None = None
     backend_type: ExecutionBackendType
     account_id: str | None = None
     task_id: str | None = None
@@ -67,6 +68,7 @@ class SessionCreate(BaseModel):
     agent_id: str
     project_id: str
     provider_id: str
+    runtime_binding_id: str | None = None
     backend_type: ExecutionBackendType
     account_id: str | None = None
     task_id: str | None = None

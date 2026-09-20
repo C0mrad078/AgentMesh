@@ -29,6 +29,7 @@ def _row_to_session(row: aiosqlite.Row) -> Session:
         agent_id=row["agent_id"],
         project_id=row["project_id"],
         provider_id=row["provider_id"],
+        runtime_binding_id=row["runtime_binding_id"],
         backend_type=ExecutionBackendType(row["backend_type"]),
         account_id=row["account_id"],
         task_id=row["task_id"],
@@ -53,13 +54,13 @@ class SessionsRepository:
         await self._db.execute(
             """
             INSERT INTO sessions (id, agent_id, project_id, provider_id, backend_type, account_id,
-                                   task_id, worktree_id, external_session_id, status, started_at,
+                                   runtime_binding_id, task_id, worktree_id, external_session_id, status, started_at,
                                    updated_at, finished_at, metadata, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL, ?, NULL, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL, ?, NULL, ?, ?)
             """,
             (
                 session_id, data.agent_id, data.project_id, data.provider_id, data.backend_type.value,
-                data.account_id, data.task_id, data.worktree_id, SessionStatus.CREATED.value, now,
+                data.account_id, data.runtime_binding_id, data.task_id, data.worktree_id, SessionStatus.CREATED.value, now,
                 dumps(data.metadata), now,
             ),
         )
@@ -100,6 +101,15 @@ class SessionsRepository:
         await self._db.execute(
             "UPDATE sessions SET external_session_id = ?, updated_at = ? WHERE id = ?",
             (external_session_id, now, session_id),
+        )
+        return await self.get_or_raise(session_id)
+
+    async def set_process(self, session_id: str, process_id: int | None, *, started: bool = False) -> Session:
+        await self.get_or_raise(session_id)
+        now = utc_now().isoformat()
+        await self._db.execute(
+            "UPDATE sessions SET process_id=?, process_started_at=COALESCE(process_started_at, ?), updated_at=? WHERE id=?",
+            (str(process_id) if process_id is not None else None, now if started else None, now, session_id),
         )
         return await self.get_or_raise(session_id)
 

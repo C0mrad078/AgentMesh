@@ -49,6 +49,8 @@ class Agent(BaseModel):
     name: str
     description: str = ""
     provider: str
+    runtime_binding_id: str | None = None
+    max_sessions: int = Field(default=1, ge=1, le=8)
     model: str = ""
     system_prompt: str = ""
     capabilities: list[AgentCapability] = Field(default_factory=list)
@@ -111,8 +113,13 @@ class AgentCreate(BaseModel):
     role: str = Field(default="", max_length=200)
     description: str = Field(default="", max_length=4000)
     provider: str = "mock"
+    runtime_binding_id: str | None = None
+    max_sessions: int = Field(default=1, ge=1, le=8)
     model: str = ""
     capabilities: list[AgentCapability] = Field(default_factory=list)
+    permissions: AgentPermissions = Field(default_factory=AgentPermissions)
+    system_prompt: str = Field(default="", max_length=16000)
+    memory_profile: dict[str, str] = Field(default_factory=dict)
     preferred_backend: ExecutionBackendType | None = None
     fallback_backend: ExecutionBackendType | None = None
     project_id: str | None = None
@@ -132,6 +139,8 @@ class AgentUpdate(BaseModel):
     role: str | None = Field(default=None, max_length=200)
     description: str | None = Field(default=None, max_length=4000)
     provider: str | None = None
+    runtime_binding_id: str | None = None
+    max_sessions: int | None = Field(default=None, ge=1, le=8)
     preferred_backend: ExecutionBackendType | None = None
     fallback_backend: ExecutionBackendType | None = None
     project_id: str | None = None

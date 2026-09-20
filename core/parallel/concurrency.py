@@ -12,6 +12,7 @@ from core.utils.errors import ValidationError
 class ParallelLimits:
     global_sessions: int = 4
     per_provider: int = 2
+    per_binding: int = 4
     per_project: int = 3
     per_mission: int = 3
 
@@ -23,6 +24,7 @@ class ParallelConcurrency:
         self.limits = limits or ParallelLimits()
         self._global = asyncio.Semaphore(self.limits.global_sessions)
         self._provider: dict[str, asyncio.Semaphore] = {}
+        self._binding: dict[str, asyncio.Semaphore] = {}
         self._project: dict[str, asyncio.Semaphore] = {}
         self._mission: dict[str, asyncio.Semaphore] = {}
 
@@ -32,14 +34,20 @@ class ParallelConcurrency:
         return values[key]
 
     @asynccontextmanager
-    async def acquire(self, *, provider: str, project_id: str, mission_id: str) -> AsyncIterator[None]:
+    async def acquire(self, *, provider: str, project_id: str, mission_id: str, binding_id: str | None = None) -> AsyncIterator[None]:
         async with self._global:
             async with self._get(self._provider, provider, self.limits.per_provider):
-                async with self._get(self._project, project_id, self.limits.per_project):
-                    async with self._get(self._mission, mission_id, self.limits.per_mission):
-                        yield
+                if binding_id:
+                    async with self._get(self._binding, binding_id, self.limits.per_binding):
+                        async with self._get(self._project, project_id, self.limits.per_project):
+                            async with self._get(self._mission, mission_id, self.limits.per_mission):
+                                yield
+                else:
+                    async with self._get(self._project, project_id, self.limits.per_project):
+                        async with self._get(self._mission, mission_id, self.limits.per_mission):
+                            yield
 
     def validate(self) -> None:
-        if min(self.limits.global_sessions, self.limits.per_provider,
+        if min(self.limits.global_sessions, self.limits.per_provider, self.limits.per_binding,
                self.limits.per_project, self.limits.per_mission) < 1:
             raise ValidationError("Todos os limites de concorrência precisam ser positivos.")

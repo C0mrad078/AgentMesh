@@ -68,6 +68,11 @@ export const agentsApi = {
     fallback_backend?: ExecutionBackendType | null;
     project_id?: string | null;
     visual_profile?: Record<string, string>;
+    runtime_binding_id?: string | null;
+    max_sessions?: number;
+    permissions?: Partial<Agent["permissions"]>;
+    system_prompt?: string;
+    memory_profile?: Record<string, string>;
   }) => invokeBridge<Agent>("agent.create", input),
   update: (
     agent_id: string,
@@ -81,6 +86,8 @@ export const agentsApi = {
       project_id: string | null;
       active: boolean;
       visual_profile: Record<string, string>;
+      runtime_binding_id: string | null;
+      max_sessions: number;
     }>,
   ) => invokeBridge<Agent>("agent.update", { agent_id, ...input }),
 };
@@ -173,6 +180,20 @@ export const settingsApi = {
     "settings.update",
     { key, value },
   ),
+};
+
+export interface RuntimeBinding {
+  id: string; provider_id: string; account_id: string | null; label: string;
+  configured_capacity: number; observed_capacity: number; reserved_slots: number;
+  health: string; backoff_until: string | null;
+}
+
+export const runtimeBindingsApi = {
+  list: (provider_id?: string) => invokeBridge<RuntimeBinding[]>("runtime_binding.list", provider_id ? { provider_id } : {}),
+  create: (input: { provider_id: string; account_id?: string | null; label: string; configured_capacity?: number }) =>
+    invokeBridge<RuntimeBinding>("runtime_binding.create", input),
+  setCapacity: (binding_id: string, configured_capacity: number, observed_capacity?: number) =>
+    invokeBridge<RuntimeBinding>("runtime_binding.set_capacity", { binding_id, configured_capacity, observed_capacity }),
 };
 
 export const healthApi = {

@@ -27,6 +27,7 @@ from core.providers.credentials import (
     display_name_for,
     secret_key_for,
 )
+from core.providers.runtime_bindings import RuntimeBindingCreate
 from core.security.allowlist import ALL_COMMANDS, BridgeCommand
 from core.tasks.models import TaskCreate, TaskStatus
 from core.teams.models import TeamCreate, TeamUpdate
@@ -121,6 +122,11 @@ async def _agent_to_dict(agent, ctx: BridgeContext) -> dict[str, Any]:
     # in" readily available without a second round-trip per agent.
     data = agent.model_dump(mode="json")
     data["team_ids"] = await ctx.teams_repo.list_team_ids_for_agent(agent.id)
+    active_sessions = await ctx.sessions_repo.list_by_agent(agent.id)
+    data["active_sessions"] = sum(s.status.value in {"starting", "working", "waiting"} for s in active_sessions)
+    binding = await ctx.runtime_bindings_repo.get(agent.runtime_binding_id) if agent.runtime_binding_id else None
+    data["runtime_binding"] = binding.model_dump(mode="json") if binding else None
+    data["slots_available"] = max(0, min(agent.max_sessions, (binding.observed_capacity - binding.reserved_slots) if binding else agent.max_sessions) - data["active_sessions"])
     return data
 
 
@@ -133,6 +139,11 @@ async def _agent_list(_params: dict[str, Any], ctx: BridgeContext) -> list[Any]:
 @handler(BridgeCommand.AGENT_CREATE)
 async def _agent_create(params: dict[str, Any], ctx: BridgeContext) -> dict[str, Any]:
     data = AgentCreate.model_validate(params)
+    if data.runtime_binding_id is None:
+        provider_id = {"codex_cli": "openai", "claude_code_cli": "claude"}.get(data.provider)
+        bindings = await ctx.runtime_bindings_repo.list(provider_id) if provider_id else []
+        if bindings:
+            data = data.model_copy(update={"runtime_binding_id": bindings[0].id})
     agent = await ctx.agents_repo.create(data)
     return await _agent_to_dict(agent, ctx)
 
@@ -143,6 +154,32 @@ async def _agent_update(params: dict[str, Any], ctx: BridgeContext) -> dict[str,
     data = AgentUpdate.model_validate({k: v for k, v in params.items() if k != "agent_id"})
     agent = await ctx.agents_repo.update(agent_id, data)
     return await _agent_to_dict(agent, ctx)
+
+
+@handler(BridgeCommand.RUNTIME_BINDING_LIST)
+async def _runtime_binding_list(params: dict[str, Any], ctx: BridgeContext) -> list[Any]:
+    provider_id = params.get("provider_id")
+    values = await ctx.runtime_bindings_repo.list(provider_id if isinstance(provider_id, str) else None)
+    return [value.model_dump(mode="json") for value in values]
+
+
+@handler(BridgeCommand.RUNTIME_BINDING_CREATE)
+async def _runtime_binding_create(params: dict[str, Any], ctx: BridgeContext) -> dict[str, Any]:
+    value = await ctx.runtime_bindings_repo.create(RuntimeBindingCreate.model_validate(params))
+    return value.model_dump(mode="json")
+
+
+@handler(BridgeCommand.RUNTIME_BINDING_SET_CAPACITY)
+async def _runtime_binding_set_capacity(params: dict[str, Any], ctx: BridgeContext) -> dict[str, Any]:
+    binding_id = _require_str(params, "binding_id")
+    configured = params.get("configured_capacity")
+    if not isinstance(configured, int) or isinstance(configured, bool) or not 1 <= configured <= 32:
+        raise ValidationError("configured_capacity deve ser um inteiro entre 1 e 32.")
+    observed = params.get("observed_capacity")
+    if observed is not None and (not isinstance(observed, int) or isinstance(observed, bool) or not 0 <= observed <= configured):
+        raise ValidationError("observed_capacity deve estar entre 0 e configured_capacity.")
+    value = await ctx.runtime_bindings_repo.set_capacity(binding_id, configured, observed)
+    return value.model_dump(mode="json")
 
 
 # --- teams --------------------------------------------------------------------

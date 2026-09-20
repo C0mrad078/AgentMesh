@@ -236,11 +236,14 @@ _COLLABORATION_AGENTS = [
         id=f"agent_{provider}_{role}", name=f"{label} {role.title()}",
         provider=provider, model="default", role=role,
         capabilities=[AgentCapability(name=c) for c in capabilities],
-        permissions=AgentPermissions(can_read_files=True, can_run_terminal=True),
+        permissions=AgentPermissions(can_read_files=True, can_write_files=role.startswith("worker"),
+                                     can_run_git=role.startswith("worker"), can_run_terminal=True),
         system_prompt="Provide independent, evidence-based planning or review. Never approve your own work.",
     )
     for provider, label in [("codex_cli", "Codex CLI"), ("claude_code_cli", "Claude Code")]
     for role, capabilities in [("leader", ["planning", "architecture"]),
+                               ("worker_atlas", ["coding", "debugging", "refactoring", "testing"]),
+                               ("worker_nova", ["coding", "debugging", "refactoring", "testing"]),
                                ("reviewer", ["code_review", "testing"])]
 ]
 DEFAULT_AGENTS: list[Agent] = [*_MOCK_AGENTS, *_STANDARD_AGENTS, *_COLLABORATION_AGENTS]

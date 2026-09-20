@@ -94,7 +94,9 @@ class WorktreeManager:
             created = await self.git(integration_root, ["branch", integration_branch, worktree.base_sha])
             if not created.success:
                 return False, "", created.stderr[:1000]
-        checkout = await self.git(integration_root, ["checkout", "--detach", integration_branch])
+        # The integration worktree owns this branch. Keep it attached so the
+        # branch ref advances and restart/recovery can inspect the resulting SHA.
+        checkout = await self.git(integration_root, ["checkout", integration_branch])
         if not checkout.success:
             return False, "", checkout.stderr[:1000]
         merge = await self.git(integration_root, ["merge", "--no-edit", worktree.branch_name])

@@ -53,6 +53,7 @@ class ConcurrencyLease(BaseModel):
     session_id: str | None = None
     project_id: str
     provider: str
+    runtime_binding_id: str | None = None
     account_id: str | None = None
     expires_at: datetime
     created_at: datetime

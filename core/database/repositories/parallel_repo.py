@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from core.database.connection import Database
@@ -19,6 +20,7 @@ from core.utils.time import utc_now
 class ParallelRepository:
     def __init__(self, db: Database) -> None:
         self.db = db
+        self._lease_lock = asyncio.Lock()
 
     async def create_worktree(self, value: WorktreeLease) -> WorktreeLease:
         await self.db.execute(
@@ -85,35 +87,53 @@ class ParallelRepository:
         return [ConflictForecast.model_validate_json(row["data"]) for row in rows]
 
     async def acquire(self, value: ConcurrencyLease, *, limits: dict[str, int]) -> bool:
+        async with self._lease_lock:
+            return await self._acquire(value, limits=limits)
+
+    async def _acquire(self, value: ConcurrencyLease, *, limits: dict[str, int]) -> bool:
         now = utc_now().isoformat()
         await self.db.execute("DELETE FROM mission_concurrency_leases WHERE expires_at < ?", (now,))
         counts = {
             "global": "SELECT COUNT(*) AS n FROM mission_concurrency_leases",
             "provider": "SELECT COUNT(*) AS n FROM mission_concurrency_leases WHERE provider=?",
+            "runtime_binding": "SELECT COUNT(*) AS n FROM mission_concurrency_leases WHERE runtime_binding_id=?",
             "project": "SELECT COUNT(*) AS n FROM mission_concurrency_leases WHERE project_id=?",
             "mission": "SELECT COUNT(*) AS n FROM mission_concurrency_leases WHERE mission_id=?",
         }
-        params = {"global": (), "provider": (value.provider,), "project": (value.project_id,),
+        params = {"global": (), "provider": (value.provider,), "runtime_binding": (value.runtime_binding_id,), "project": (value.project_id,),
                   "mission": (value.mission_id,)}
-        for scope, sql in counts.items():
+        scopes = {k: v for k, v in counts.items() if k != "runtime_binding" or value.runtime_binding_id is not None}
+        for scope, sql in scopes.items():
             row = await self.db.fetch_one(sql, params[scope])
-            if row and int(row["n"]) >= limits[scope]:
+            if row and int(row["n"]) >= limits.get(scope, limits["provider"]):
                 return False
+        existing = await self.db.fetch_one("SELECT id FROM mission_concurrency_leases WHERE id=?", (value.id,))
         await self.db.execute(
-            "INSERT OR IGNORE INTO mission_concurrency_leases(id,mission_id,task_id,session_id,project_id,provider,account_id,expires_at,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
+            "INSERT OR IGNORE INTO mission_concurrency_leases(id,mission_id,task_id,session_id,project_id,provider,runtime_binding_id,account_id,expires_at,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
             (value.id, value.mission_id, value.task_id, value.session_id, value.project_id,
-             value.provider, value.account_id, value.expires_at.isoformat(), value.created_at.isoformat()),
+             value.provider, value.runtime_binding_id, value.account_id, value.expires_at.isoformat(), value.created_at.isoformat()),
         )
         row = await self.db.fetch_one(
             "SELECT id FROM mission_concurrency_leases WHERE mission_id=? AND task_id IS ?",
             (value.mission_id, value.task_id))
+        if existing is None and row and row["id"] == value.id and value.runtime_binding_id:
+            await self.db.execute("UPDATE runtime_bindings SET reserved_slots=reserved_slots+1, updated_at=? WHERE id=?",
+                                  (utc_now().isoformat(), value.runtime_binding_id))
         return bool(row and row["id"] == value.id)
 
     async def release(self, *, mission_id: str, task_id: str | None = None) -> None:
+        async with self._lease_lock:
+            await self._release(mission_id=mission_id, task_id=task_id)
+
+    async def _release(self, *, mission_id: str, task_id: str | None = None) -> None:
         if task_id is None:
             await self.db.execute("DELETE FROM mission_concurrency_leases WHERE mission_id=?", (mission_id,))
         else:
             await self.db.execute("DELETE FROM mission_concurrency_leases WHERE mission_id=? AND task_id=?", (mission_id, task_id))
+        await self.db.execute(
+            "UPDATE runtime_bindings SET reserved_slots=(SELECT COUNT(*) FROM mission_concurrency_leases l WHERE l.runtime_binding_id=runtime_bindings.id), updated_at=?",
+            (utc_now().isoformat(),),
+        )
 
     async def add_integration(self, value: IntegrationAttempt) -> None:
         await self.db.execute(

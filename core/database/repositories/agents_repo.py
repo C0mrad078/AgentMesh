@@ -26,6 +26,8 @@ def _row_to_agent(row: aiosqlite.Row) -> Agent:
         name=row["name"],
         description=row["description"],
         provider=row["provider"],
+        runtime_binding_id=row["runtime_binding_id"],
+        max_sessions=row["max_sessions"],
         model=row["model"],
         system_prompt=row["system_prompt"],
         capabilities=loads(row["capabilities"], []),
@@ -52,18 +54,34 @@ class AgentsRepository:
 
     async def upsert(self, agent: Agent) -> None:
         now = utc_now().isoformat()
+        columns = {row["name"] for row in await self._db.fetch_all("PRAGMA table_info(agents)")}
+        if "runtime_binding_id" not in columns:
+            await self._db.execute(
+                """INSERT INTO agents (id,name,description,provider,model,system_prompt,capabilities,tools,permissions,config,active,preferred_provider,fallback_providers,role,avatar,status,preferred_backend,fallback_backend,memory_profile,project_id,visual_profile,created_at,updated_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                   ON CONFLICT(id) DO UPDATE SET name=excluded.name,description=excluded.description,provider=excluded.provider,model=excluded.model,system_prompt=excluded.system_prompt,capabilities=excluded.capabilities,tools=excluded.tools,permissions=excluded.permissions,config=excluded.config,active=excluded.active,preferred_provider=excluded.preferred_provider,fallback_providers=excluded.fallback_providers,role=excluded.role,avatar=excluded.avatar,status=excluded.status,preferred_backend=excluded.preferred_backend,fallback_backend=excluded.fallback_backend,memory_profile=excluded.memory_profile,project_id=excluded.project_id,visual_profile=excluded.visual_profile,updated_at=excluded.updated_at""",
+                (agent.id, agent.name, agent.description, agent.provider, agent.model, agent.system_prompt or '',
+                 dumps([c.model_dump() for c in agent.capabilities]), dumps(agent.tools), dumps(agent.permissions.model_dump()),
+                 dumps(agent.config), int(agent.active), agent.preferred_provider, dumps(agent.fallback_providers),
+                 agent.role, agent.avatar, agent.status.value, agent.preferred_backend.value if agent.preferred_backend else None,
+                 agent.fallback_backend.value if agent.fallback_backend else None, dumps(agent.memory_profile), agent.project_id,
+                 dumps(agent.visual_profile), now, now),
+            )
+            return
         await self._db.execute(
             """
             INSERT INTO agents (id, name, description, provider, model, system_prompt,
+                                 runtime_binding_id, max_sessions,
                                  capabilities, tools, permissions, config, active,
                                  preferred_provider, fallback_providers,
                                  role, avatar, status, preferred_backend, fallback_backend, memory_profile,
                                  project_id, visual_profile,
                                  created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name, description = excluded.description,
                 provider = excluded.provider, model = excluded.model,
+                runtime_binding_id = excluded.runtime_binding_id, max_sessions = excluded.max_sessions,
                 system_prompt = excluded.system_prompt, capabilities = excluded.capabilities,
                 tools = excluded.tools, permissions = excluded.permissions,
                 config = excluded.config, active = excluded.active,
@@ -76,7 +94,8 @@ class AgentsRepository:
             """,
             (
                 agent.id, agent.name, agent.description, agent.provider, agent.model,
-                agent.system_prompt, dumps([c.model_dump() for c in agent.capabilities]),
+                agent.system_prompt or '', agent.runtime_binding_id, agent.max_sessions,
+                dumps([c.model_dump() for c in agent.capabilities]),
                 dumps(agent.tools), dumps(agent.permissions.model_dump()), dumps(agent.config),
                 int(agent.active), agent.preferred_provider, dumps(agent.fallback_providers),
                 agent.role, agent.avatar, agent.status.value,
@@ -94,7 +113,9 @@ class AgentsRepository:
     async def create(self, data: AgentCreate) -> Agent:
         agent = Agent(
             id=new_id("agent"), name=data.name, role=data.role, description=data.description,
-            provider=data.provider, model=data.model, capabilities=data.capabilities,
+            provider=data.provider, runtime_binding_id=data.runtime_binding_id, max_sessions=data.max_sessions,
+            model=data.model, system_prompt=data.system_prompt, capabilities=data.capabilities,
+            permissions=data.permissions, memory_profile=data.memory_profile,
             preferred_backend=data.preferred_backend, fallback_backend=data.fallback_backend,
             project_id=data.project_id, visual_profile=data.visual_profile,
         )

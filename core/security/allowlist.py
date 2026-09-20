@@ -29,6 +29,9 @@ class BridgeCommand(str, Enum):
     AGENT_LIST = "agent.list"
     AGENT_CREATE = "agent.create"
     AGENT_UPDATE = "agent.update"
+    RUNTIME_BINDING_LIST = "runtime_binding.list"
+    RUNTIME_BINDING_CREATE = "runtime_binding.create"
+    RUNTIME_BINDING_SET_CAPACITY = "runtime_binding.set_capacity"
 
     TEAM_CREATE = "team.create"
     TEAM_UPDATE = "team.update"

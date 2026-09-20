@@ -295,9 +295,13 @@ class MissionService:
         provider = await self.ctx.providers_repo.get_by_name(PROVIDER_IDS[agent.provider])
         if provider is None:
             raise MissionBlocked('Provider ausente no catálogo')
+        binding_id = agent.runtime_binding_id
+        if binding_id is None:
+            bindings = await self.ctx.runtime_bindings_repo.list(provider.id)
+            binding_id = bindings[0].id if bindings else None
         session = await self.repo.sessions.create(SessionCreate(
             agent_id=agent.id, project_id=mission.project_id, provider_id=provider.id,
-            backend_type=ExecutionBackendType.SUBSCRIPTION, task_id=task_id,
+            runtime_binding_id=binding_id, backend_type=ExecutionBackendType.SUBSCRIPTION, task_id=task_id,
             metadata={'schema_version': 1, 'mission_id': mission.id, 'role': choice.role,
                       'workspace': workspace or await self.workspace(mission), 'isolation': isolation}))
         await self.repo.link('session', mission.id, session.id)
@@ -375,6 +379,7 @@ class MissionService:
         async def observe_process(event: ProcessObservation) -> None:
             nonlocal observed_lines
             if event.kind == 'started':
+                await self.repo.sessions.set_process(session.id, event.pid, started=True)
                 await self.repo.sessions.merge_metadata(session.id, {'process_id': event.pid})
                 await self.artifact(mid, 'log', 'Processo CLI iniciado', f'PID {event.pid}', session.id, session.task_id)
                 return
@@ -410,7 +415,8 @@ class MissionService:
             workspace = str(session.metadata.get('workspace') or await self.workspace(mission))
             async def run_provider():
                 async with self.parallel.acquire(provider=agent.provider,
-                                                 project_id=mission.project_id, mission_id=mid):
+                                                 project_id=mission.project_id, mission_id=mid,
+                                                 binding_id=session.runtime_binding_id):
                     return await self.runtime.execute(session, agent, prompt,
                         workspace=workspace, writable=writable, timeout=self.session_timeout)
             call = asyncio.create_task(run_provider())
@@ -452,8 +458,20 @@ class MissionService:
         leader_choice = await self.choose(mission, 'leader')
         leader = await self.new_session(mission, leader_choice)
         agents = await self.ctx.agents_repo.list()
-        catalog = [{'id': a.id, 'role': a.role, 'capabilities': [c.name for c in a.capabilities],
-                    'provider': a.provider} for a in agents if a.active]
+        catalog = []
+        for agent in agents:
+            if not agent.active:
+                continue
+            binding = await self.ctx.runtime_bindings_repo.get(agent.runtime_binding_id) if agent.runtime_binding_id else None
+            active_count = len([s for s in await self.repo.sessions.list_by_agent(agent.id)
+                                if s.status in (SessionStatus.STARTING, SessionStatus.WORKING, SessionStatus.WAITING)])
+            catalog.append({'id': agent.id, 'name': agent.name, 'role': agent.role,
+                            'capabilities': [c.name for c in agent.capabilities], 'provider': agent.provider,
+                            'runtime_binding_id': agent.runtime_binding_id,
+                            'active_sessions': active_count, 'max_sessions': agent.max_sessions,
+                            'binding_capacity': binding.observed_capacity if binding else None,
+                            'binding_reserved': binding.reserved_slots if binding else None,
+                            'permissions': agent.permissions.model_dump()})
         extra = '\n'.join(i.content for i in await self.repo.list(Instruction, mid))
         plan = await self.turn(mid, leader,
             f'Analise o repositório e proponha tarefas para: {mission.request}\nInstruções adicionais: {extra}\n'
@@ -560,8 +578,12 @@ class MissionService:
                 choices[key] = await self.choose(mission, 'worker', reserved, pending[key].capabilities)
                 reserved.add(choices[key].agent_id)
             reviewer_choice = await self.choose(mission, 'reviewer', reserved)
-            await asyncio.gather(*(self.run_parallel_task(
-                mission, plan, leader, pending[key], workspace, base_sha, choices[key], reviewer_choice) for key in ready))
+            outcomes = await asyncio.gather(*(self.run_parallel_task(
+                mission, plan, leader, pending[key], workspace, base_sha, choices[key], reviewer_choice)
+                for key in ready), return_exceptions=True)
+            failures = [outcome for outcome in outcomes if isinstance(outcome, BaseException)]
+            if failures:
+                raise failures[0]
             completed.update(ready)
             for key in ready:
                 del pending[key]
@@ -585,13 +607,16 @@ class MissionService:
                    'validation_commands': planned.validation_commands}))
         await self.repo.link('task', mid, task.id)
         selected_agent = await self.ctx.agents_repo.get(worker_choice.agent_id)
+        binding = await self.ctx.runtime_bindings_repo.get(selected_agent.runtime_binding_id) if selected_agent and selected_agent.runtime_binding_id else None
         lease = ConcurrencyLease(
             id=new_id('lease'), mission_id=mid, task_id=task.id, project_id=mission.project_id,
             provider=selected_agent.provider if selected_agent else 'unknown',
+            runtime_binding_id=binding.id if binding else None,
             expires_at=utc_now() + timedelta(minutes=30), created_at=utc_now())
         admitted = await self.ctx.parallel_repo.acquire(lease, limits={
             'global': self.parallel.limits.global_sessions,
             'provider': self.parallel.limits.per_provider,
+            'runtime_binding': min(self.parallel.limits.per_binding, binding.observed_capacity if binding else self.parallel.limits.per_binding),
             'project': self.parallel.limits.per_project,
             'mission': self.parallel.limits.per_mission,
         })
@@ -628,7 +653,11 @@ class MissionService:
             async with self.review_gate:
                 review = await self.turn(mission.id, reviewer,
                     f"Revise independentemente a task {planned.title}. Base SHA {base_sha}; head SHA {head_sha}. "
-                    f"Critérios: {planned.acceptance}. Diff/evidência:\n{diff.content}", ReviewOutput)
+                    f"Critérios: {planned.acceptance}. Diff/evidência:\n{diff.content}\n"
+                    "Se houver qualquer falha corrigível, use changes_requested com finding concreto. "
+                    "Use human_input_required somente se faltar uma decisão, credencial ou permissão externa. "
+                    f"O backend já registrou a main no projeto {project_root} e o base SHA {base_sha}; não solicite ao usuário acesso à main "
+                    "nem evidência adicional sobre arquivos fora da sua worktree de revisão.", ReviewOutput)
             review_row = Review(**review.model_dump(), id=new_id('review'), mission_id=mid,
                 task_id=task.id, worker_session_id=worker.id, reviewer_session_id=reviewer.id,
                 round=round_number, created_at=utc_now())

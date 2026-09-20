@@ -42,6 +42,8 @@ export function AgentFormDialog({ open, onOpenChange, agent, projects }: AgentFo
   const [role, setRole] = useState("");
   const [description, setDescription] = useState("");
   const [provider, setProvider] = useState("mock");
+  const [runtimeBindingId, setRuntimeBindingId] = useState("");
+  const [maxSessions, setMaxSessions] = useState(1);
   const [projectId, setProjectId] = useState<string>("");
   const [preferredBackend, setPreferredBackend] = useState<ExecutionBackendType | "">("");
   const [visualPreset, setVisualPreset] = useState<string>("");
@@ -54,6 +56,8 @@ export function AgentFormDialog({ open, onOpenChange, agent, projects }: AgentFo
     setRole(agent?.role ?? "");
     setDescription(agent?.description ?? "");
     setProvider(agent?.provider ?? "mock");
+    setRuntimeBindingId(agent?.runtime_binding_id ?? "");
+    setMaxSessions(agent?.max_sessions ?? 1);
     setProjectId(agent?.project_id ?? "");
     setPreferredBackend(agent?.preferred_backend ?? "");
     setVisualPreset(agent?.visual_profile.preset ?? "");
@@ -74,6 +78,8 @@ export function AgentFormDialog({ open, onOpenChange, agent, projects }: AgentFo
         role: role.trim(),
         description: description.trim(),
         provider: provider.trim() || "mock",
+        runtime_binding_id: runtimeBindingId || null,
+        max_sessions: maxSessions,
         preferred_backend: preferredBackend || null,
         project_id: projectId || null,
         visual_profile: (visualPreset ? { preset: visualPreset } : {}) as Record<string, string>,
@@ -151,6 +157,14 @@ export function AgentFormDialog({ open, onOpenChange, agent, projects }: AgentFo
               <div className="flex flex-col gap-1.5">
                 <Label htmlFor="agent-provider">Provider</Label>
                 <Input id="agent-provider" value={provider} onChange={(e) => setProvider(e.target.value)} placeholder="mock" />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="agent-binding">RuntimeBinding (opcional)</Label>
+                <Input id="agent-binding" value={runtimeBindingId} onChange={(e) => setRuntimeBindingId(e.target.value)} placeholder="runtime_openai_cli" />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="agent-max-sessions">Sessões simultâneas</Label>
+                <Input id="agent-max-sessions" type="number" min={1} max={8} value={maxSessions} onChange={(e) => setMaxSessions(Math.max(1, Math.min(8, Number(e.target.value) || 1)))} />
               </div>
               <div className="flex flex-col gap-1.5">
                 <Label htmlFor="agent-visual">Visual no Office</Label>

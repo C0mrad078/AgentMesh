@@ -65,6 +65,7 @@ from core.database.repositories.providers_repo import ProvidersRepository
 from core.database.repositories.reflections_repo import ReflectionsRepository
 from core.database.repositories.routing_decisions_repo import RoutingDecisionsRepository
 from core.database.repositories.rule_evidence_repo import RuleEvidenceRepository
+from core.database.repositories.runtime_bindings_repo import RuntimeBindingsRepository
 from core.database.repositories.sessions_repo import SessionsRepository
 from core.database.repositories.settings_repo import SettingsRepository
 from core.database.repositories.tasks_repo import TasksRepository
@@ -173,6 +174,7 @@ class BridgeContext:
     teams_repo: TeamsRepository
     providers_repo: ProvidersRepository
     provider_accounts_repo: ProviderAccountsRepository
+    runtime_bindings_repo: RuntimeBindingsRepository
     provider_backends_repo: ProviderBackendsRepository
     sessions_repo: SessionsRepository
     worktrees_repo: WorktreesRepository
@@ -272,6 +274,14 @@ async def build_context(
     teams_repo = TeamsRepository(db)
     providers_repo = ProvidersRepository(db)
     provider_accounts_repo = ProviderAccountsRepository(db)
+    runtime_bindings_repo = RuntimeBindingsRepository(db)
+    await runtime_bindings_repo.ensure_defaults()
+    await runtime_bindings_repo.reconcile_slots()
+    for existing_agent in await agents_repo.list(only_active=False):
+        if existing_agent.runtime_binding_id is None:
+            binding_id = {"codex_cli": "runtime_openai_cli", "claude_code_cli": "runtime_claude_cli"}.get(existing_agent.provider)
+            if binding_id and await runtime_bindings_repo.get(binding_id):
+                await agents_repo.upsert(existing_agent.model_copy(update={"runtime_binding_id": binding_id}))
     provider_backends_repo = ProviderBackendsRepository(db)
     sessions_repo = SessionsRepository(db)
     worktrees_repo = WorktreesRepository(db)
@@ -422,6 +432,7 @@ async def build_context(
         teams_repo=teams_repo,
         providers_repo=providers_repo,
         provider_accounts_repo=provider_accounts_repo,
+        runtime_bindings_repo=runtime_bindings_repo,
         provider_backends_repo=provider_backends_repo,
         sessions_repo=sessions_repo,
         worktrees_repo=worktrees_repo,

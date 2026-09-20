@@ -107,6 +107,8 @@ export interface Agent {
   name: string;
   description: string;
   provider: string;
+  runtime_binding_id?: string | null;
+  max_sessions?: number;
   model: string;
   system_prompt: string;
   capabilities: AgentCapability[];
@@ -131,6 +133,9 @@ export interface Agent {
   /** Real, computed server-side (`core.bridge.handlers._agent_to_dict`) --
    * never fabricated client-side. Empty when the agent belongs to no team. */
   team_ids: string[];
+  active_sessions?: number;
+  slots_available?: number;
+  runtime_binding?: { id: string; label: string; configured_capacity: number; observed_capacity: number; reserved_slots: number; health: string } | null;
 }
 
 export interface Team {

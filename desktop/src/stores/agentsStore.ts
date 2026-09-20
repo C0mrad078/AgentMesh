@@ -10,6 +10,8 @@ export interface AgentCreateInput {
   preferred_backend?: ExecutionBackendType | null;
   project_id?: string | null;
   visual_profile?: Record<string, string>;
+  runtime_binding_id?: string | null;
+  max_sessions?: number;
 }
 
 export interface AgentUpdateInput {
@@ -21,6 +23,8 @@ export interface AgentUpdateInput {
   project_id?: string | null;
   active?: boolean;
   visual_profile?: Record<string, string>;
+  runtime_binding_id?: string | null;
+  max_sessions?: number;
 }
 
 interface AgentsState {

@@ -231,9 +231,10 @@ _STANDARD_AGENTS: list[Agent] = [
 
 # Explicit, independently persisted identities; never create a reviewer by copying
 # the working Session or allowing a worker to approve its own implementation.
+_COLLAB_NAMES = {'leader': 'Orchestrator', 'worker_atlas': 'Atlas', 'worker_nova': 'Nova', 'reviewer': 'Sentinel'}
 _COLLABORATION_AGENTS = [
     Agent(
-        id=f"agent_{provider}_{role}", name=f"{label} {role.title()}",
+        id=f"agent_{provider}_{role}", name=f"{label} {_COLLAB_NAMES[role]}",
         provider=provider, model="default", role=role,
         capabilities=[AgentCapability(name=c) for c in capabilities],
         permissions=AgentPermissions(can_read_files=True, can_write_files=role.startswith("worker"),

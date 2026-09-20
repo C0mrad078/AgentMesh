@@ -48,14 +48,14 @@ describe("ProjectsPage", () => {
     expect(screen.getByText("/Users/dev/agentmash")).toBeInTheDocument();
   });
 
-  it("entering the office selects the project and navigates to Office", async () => {
+  it("opening the workspace selects the project and navigates to collaboration", async () => {
     useProjectsStore.setState({ projects: [project()] });
     render(<ProjectsPage />);
 
-    await userEvent.click(screen.getByRole("button", { name: "Abrir Office" }));
+    await userEvent.click(screen.getByRole("button", { name: "Abrir Workspace" }));
 
     expect(useProjectsStore.getState().selectedProjectId).toBe("proj_1");
-    expect(useUiStore.getState().activePage).toBe("office");
+    expect(useUiStore.getState().activePage).toBe("collaboration");
   });
 
   it("opens the new project dialog", async () => {

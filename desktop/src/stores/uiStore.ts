@@ -1,11 +1,9 @@
 import { create } from "zustand";
 import type { TaskMode } from "@/types";
 
-// AgentMash V2 (docs/agentmash-v2-migration.md): "agents" was renamed
-// "team" and gained real Projects/Memory/Providers destinations alongside
-// it -- "office" stays the only page the app opens to (never a dashboard).
+// V3: collaboration is operational; Pixel Office remains a secondary view.
 export type AppPage =
-  | "office" | "projects" | "team" | "workspace" | "executions"
+  | "collaboration" | "office" | "projects" | "team" | "workspace" | "executions"
   | "memory" | "providers" | "learning" | "settings";
 
 interface UiState {
@@ -20,10 +18,7 @@ interface UiState {
 }
 
 export const useUiStore = create<UiState>((set) => ({
-  // Virtual Office is the new default landing page (spec section 4) --
-  // Workspace ("Classic Dashboard") remains one click away and fully
-  // functional (spec section 34: the Office is never mandatory).
-  activePage: "office",
+  activePage: "collaboration",
   setActivePage: (page) => set({ activePage: page }),
   newProjectDialogOpen: false,
   setNewProjectDialogOpen: (open) => set({ newProjectDialogOpen: open }),

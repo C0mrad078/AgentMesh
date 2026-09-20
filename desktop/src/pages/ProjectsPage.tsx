@@ -25,9 +25,9 @@ export function ProjectsPage() {
     if (!loaded) void loadProjects();
   }, [loaded, loadProjects]);
 
-  function enterOffice(projectId: string) {
+  function enterWorkspace(projectId: string) {
     selectProject(projectId);
-    setActivePage("office");
+    setActivePage("collaboration");
   }
 
   return (
@@ -90,8 +90,8 @@ export function ProjectsPage() {
                 {project.description && (
                   <p className="text-xs text-muted-foreground">{project.description}</p>
                 )}
-                <Button size="sm" variant="secondary" onClick={() => enterOffice(project.id)}>
-                  Abrir Office
+                <Button size="sm" variant="secondary" onClick={() => enterWorkspace(project.id)}>
+                  Abrir Workspace
                 </Button>
               </CardContent>
             </Card>

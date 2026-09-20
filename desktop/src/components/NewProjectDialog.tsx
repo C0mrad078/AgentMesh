@@ -21,6 +21,7 @@ export function NewProjectDialog() {
 
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  const [workspacePath, setWorkspacePath] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -33,9 +34,10 @@ export function NewProjectDialog() {
     setSubmitting(true);
     setError(null);
     try {
-      await createProject({ name: name.trim(), description: description.trim() });
+      await createProject({ name: name.trim(), description: description.trim(), ...(workspacePath.trim() ? { workspace_path: workspacePath.trim() } : {}) });
       setName("");
       setDescription("");
+      setWorkspacePath("");
       setOpen(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -74,6 +76,11 @@ export function NewProjectDialog() {
                 onChange={(e) => setDescription(e.target.value)}
                 placeholder="Do que se trata este projeto?"
               />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="project-workspace">Diretório do projeto existente</Label>
+              <Input id="project-workspace" value={workspacePath} onChange={e => setWorkspacePath(e.target.value)} placeholder="Caminho completo do repositório" />
+              <p className="text-xs text-muted-foreground">Necessário para executar missões. Os arquivos existentes serão preservados.</p>
             </div>
             {error && <p className="text-xs text-destructive">{error}</p>}
           </div>

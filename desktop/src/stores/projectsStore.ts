@@ -9,7 +9,7 @@ interface ProjectsState {
   error: string | null;
   loaded: boolean;
   loadProjects: () => Promise<void>;
-  createProject: (input: { name: string; description?: string }) => Promise<Project>;
+  createProject: (input: { name: string; description?: string; workspace_path?: string }) => Promise<Project>;
   selectProject: (projectId: string | null) => void;
 }
 

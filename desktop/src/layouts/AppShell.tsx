@@ -16,7 +16,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const activePage = useUiStore((s) => s.activePage);
   // The Office is a real 2D world -- it never gets the padded/scrolling
   // treatment every other (still page-shaped) screen uses.
-  const isOffice = activePage === "office";
+  const isOffice = (activePage === "office" || activePage === "collaboration");
 
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-background text-foreground">

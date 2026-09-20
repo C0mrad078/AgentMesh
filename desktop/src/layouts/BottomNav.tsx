@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import { useUiStore, type AppPage } from "@/stores/uiStore";
 
 const NAV_ITEMS: { page: AppPage; label: string; icon: typeof Building2 }[] = [
+  { page: "collaboration", label: "Workspace", icon: MessagesSquare },
   { page: "office", label: "Office", icon: Building2 },
   { page: "projects", label: "Projetos", icon: FolderKanban },
   { page: "team", label: "Equipe", icon: Users },

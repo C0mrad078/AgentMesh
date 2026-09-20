@@ -20,7 +20,10 @@ import { useOfficeDomainSync } from "@/hooks/useOfficeDomainSync";
 // cost the rest of the app performance).
 const OfficePage = lazy(() => import("@/pages/OfficePage").then((m) => ({ default: m.OfficePage })));
 
+const AgentWorkspacePage = lazy(() => import("@/pages/AgentWorkspacePage").then(m => ({ default: m.AgentWorkspacePage })));
+
 const PAGES = {
+  collaboration: AgentWorkspacePage,
   office: OfficePage,
   projects: ProjectsPage,
   team: TeamPage,
@@ -33,6 +36,7 @@ const PAGES = {
 };
 
 const PAGE_LABELS: Record<keyof typeof PAGES, string> = {
+  collaboration: "Agent Workspace",
   office: "Office",
   projects: "Projetos",
   team: "Equipe",

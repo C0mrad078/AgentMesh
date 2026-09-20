@@ -70,12 +70,11 @@ async def run_migrations(conn: aiosqlite.Connection) -> list[int]:
         sql = path.read_text(encoding="utf-8")
         logger.info("applying_migration", extra={"context": {"version": version, "file": path.name}})
         try:
-            await conn.executescript(sql)
-            await conn.execute(
-                "INSERT INTO schema_migrations (version, filename) VALUES (?, ?)",
-                (version, path.name),
+            filename = path.name.replace("'", "''")
+            await conn.executescript(
+                "BEGIN IMMEDIATE;\n" + sql +
+                f"\nINSERT INTO schema_migrations(version,filename) VALUES({version},'{filename}');\nCOMMIT;"
             )
-            await conn.commit()
         except Exception:
             await conn.rollback()
             logger.error(

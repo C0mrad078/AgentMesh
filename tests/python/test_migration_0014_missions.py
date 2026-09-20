@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+import aiosqlite
 import pytest
-
 from core.agents.models import Agent
 from core.database.connection import Database
 from core.database.migrations import runner
@@ -43,5 +43,20 @@ async def test_mission_migration_empty_and_existing(tmp_path, monkeypatch, upgra
         assert events[0].record.status == 'draft'
         assert events[1].record.status == 'analyzing'
         assert await runner.run_migrations(db.connection) == []
+    finally:
+        await db.close()
+
+
+async def test_failed_migration_rolls_back_ddl(tmp_path, monkeypatch):
+    bad = tmp_path / '0099_bad.sql'
+    bad.write_text('CREATE TABLE should_not_survive(id TEXT);\nINVALID SQL;')
+    db = Database(tmp_path / 'atomic.db')
+    await db.connect()
+    try:
+        monkeypatch.setattr(runner, 'discover_migrations', lambda: [(99, bad)])
+        with pytest.raises(aiosqlite.OperationalError):
+            await runner.run_migrations(db.connection)
+        assert await db.fetch_one("SELECT name FROM sqlite_master WHERE name='should_not_survive'") is None
+        assert 99 not in await runner.applied_versions(db.connection)
     finally:
         await db.close()

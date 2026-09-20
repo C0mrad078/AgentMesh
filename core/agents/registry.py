@@ -229,7 +229,21 @@ _STANDARD_AGENTS: list[Agent] = [
     ),
 ]
 
-DEFAULT_AGENTS: list[Agent] = [*_MOCK_AGENTS, *_STANDARD_AGENTS]
+# Explicit, independently persisted identities; never create a reviewer by copying
+# the working Session or allowing a worker to approve its own implementation.
+_COLLABORATION_AGENTS = [
+    Agent(
+        id=f"agent_{provider}_{role}", name=f"{label} {role.title()}",
+        provider=provider, model="default", role=role,
+        capabilities=[AgentCapability(name=c) for c in capabilities],
+        permissions=AgentPermissions(can_read_files=True, can_run_terminal=True),
+        system_prompt="Provide independent, evidence-based planning or review. Never approve your own work.",
+    )
+    for provider, label in [("codex_cli", "Codex CLI"), ("claude_code_cli", "Claude Code")]
+    for role, capabilities in [("leader", ["planning", "architecture"]),
+                               ("reviewer", ["code_review", "testing"])]
+]
+DEFAULT_AGENTS: list[Agent] = [*_MOCK_AGENTS, *_STANDARD_AGENTS, *_COLLABORATION_AGENTS]
 
 
 class AgentRegistry:

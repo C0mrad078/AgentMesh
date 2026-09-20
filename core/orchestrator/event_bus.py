@@ -33,6 +33,7 @@ logger = get_logger("orchestrator.event_bus")
 
 
 class EventType(str, Enum):
+    MISSION_CHANGED = "mission.changed"
     EXECUTION_CREATED = "execution.created"
     PLAN_CREATED = "plan.created"
     STEP_STARTED = "step.started"

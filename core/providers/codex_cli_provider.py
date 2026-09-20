@@ -79,9 +79,13 @@ class CodexCliProvider(CliProviderAdapter):
         model = real_model_or_none(request.metadata)
         risk = _risk_from_metadata(request.metadata)
         argv = ["codex", "exec", "--json", "--skip-git-repo-check", "-s", sandbox_mode_for(risk)]
+        resume_id = request.metadata.get('resume_session_id')
+        if isinstance(resume_id, str) and resume_id:
+            # Parent exec flags retain the sandbox for this exact resumed session.
+            argv += ['resume', resume_id]
         if model:
             argv += ["-m", model]
-        if request.workspace_path:
+        if request.workspace_path and not resume_id:
             argv += ["-C", request.workspace_path]
         argv.append("-")  # read the prompt from stdin, never argv (no OS argv-length risk)
 

@@ -82,6 +82,16 @@ class ClaudeCodeCliProvider(CliProviderAdapter):
             "--permission-mode", claude_permission_mode_for(risk),
             "--permission-prompts", "none",
         ]
+        if request.metadata.get('mission_session'):
+            tools = ['Read', 'Glob', 'Grep']
+            if not request.metadata.get('read_only'):
+                tools += ['Edit', 'Write']
+                if request.metadata.get('can_run_terminal'):
+                    tools += ['Bash']
+            argv += ['--tools', ','.join(tools), '--strict-mcp-config', '--safe-mode']
+        resume_id = request.metadata.get('resume_session_id')
+        if isinstance(resume_id, str) and resume_id:
+            argv += ['--resume', resume_id]
         if model:
             argv += ["--model", model]
 
@@ -90,12 +100,11 @@ class ClaudeCodeCliProvider(CliProviderAdapter):
             argv, cwd=request.workspace_path, timeout=request.timeout_seconds,
             execution_id=request.execution_id, stdin_data=prompt.encode("utf-8"),
         )
-        if not result.success:
-            raise ProviderUnavailableError(
-                f"claude exited {result.returncode}: {(result.stderr or result.stdout)[:500]}"
-            )
-
         turn = parse_claude_stream_json(result.stdout)
+        if not result.success:
+            detail = turn.error_message or result.stderr or result.stdout[-1000:]
+            raise ProviderUnavailableError(f"claude exited {result.returncode}: {detail[:1000]}")
+
         if turn.failed:
             raise ProviderInvalidResponseError(turn.error_message or "Claude Code reported a turn failure.")
 

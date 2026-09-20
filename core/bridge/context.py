@@ -82,6 +82,7 @@ from core.learning.prompt_optimizer import PromptOptimizer
 from core.learning.reflection_engine import ReflectionEngine
 from core.learning.rule_resolver import RuleResolver
 from core.memory.store import SqliteMemoryStore
+from core.missions.service import MissionService
 from core.orchestrator.aggregator import ResultAggregator
 from core.orchestrator.budget import BudgetManager
 from core.orchestrator.concurrency import ConcurrencyManager
@@ -182,7 +183,11 @@ class BridgeContext:
     prompt_optimizer: PromptOptimizer
     context_optimizer: ContextOptimizer
 
+    mission_service: MissionService | None = None
+
     async def close(self) -> None:
+        if self.mission_service is not None:
+            await self.mission_service.close()
         # Let any in-flight background reflection/learning work finish
         # before the DB and provider adapters it depends on go away --
         # otherwise a reflection racing shutdown would fail loudly (or
@@ -370,7 +375,7 @@ async def build_context(
         health_monitor=health_monitor,
     )
 
-    return BridgeContext(
+    context = BridgeContext(
         db=db,
         audit_logger=audit_logger,
         project_service=project_service,
@@ -426,3 +431,7 @@ async def build_context(
         prompt_optimizer=prompt_optimizer,
         context_optimizer=context_optimizer,
     )
+
+    context.mission_service = MissionService(context)
+    await context.mission_service.recover()
+    return context

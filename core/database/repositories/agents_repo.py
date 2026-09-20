@@ -88,7 +88,8 @@ class AgentsRepository:
 
     async def seed_defaults(self, agents: list[Agent]) -> None:
         for agent in agents:
-            await self.upsert(agent)
+            if await self.get(agent.id) is None:
+                await self.upsert(agent)
 
     async def create(self, data: AgentCreate) -> Agent:
         agent = Agent(

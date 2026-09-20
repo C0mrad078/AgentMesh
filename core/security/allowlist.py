@@ -13,6 +13,11 @@ from enum import Enum
 
 
 class BridgeCommand(str, Enum):
+    MISSION_CREATE = "mission.create"
+    MISSION_LIST = "mission.list"
+    MISSION_GET = "mission.get"
+    MISSION_COMMAND = "mission.command"
+
     HEALTH_CHECK = "health.check"
 
     PROJECT_CREATE = "project.create"

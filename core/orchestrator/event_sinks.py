@@ -23,7 +23,8 @@ def make_audit_trail_sink(repo: ExecutionEventsRepository):
     page's "Execution Inspector" / debug view."""
 
     async def sink(event: OrchestrationEvent) -> None:
-        await repo.record(event)
+        if event.type != EventType.MISSION_CHANGED:
+            await repo.record(event)
 
     return sink
 

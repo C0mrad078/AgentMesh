@@ -17,6 +17,7 @@ from core.agents.models import AgentCreate, AgentUpdate
 from core.bridge.context import BridgeContext
 from core.database.backup import create_backup, list_backups, restore_backup
 from core.learning.prompt_optimizer import PromptProposal
+from core.missions.models import MissionCommand, MissionCreate
 from core.orchestrator.budget import BudgetLimits
 from core.projects.models import ProjectCreate, ProjectUpdate
 from core.providers.base import AIRequest, ConnectionTestResult
@@ -256,7 +257,28 @@ async def _execution_start(params: dict[str, Any], ctx: BridgeContext) -> dict[s
     # Fire-and-forget: the engine streams progress via events and the final
     # state is persisted, so the request returns immediately with the task
     # id the frontend should watch rather than blocking for the whole run.
-    asyncio.create_task(ctx.engine.run(task))
+    if task.input.get('mission_id'):
+        raise ValidationError('Tarefas de missão devem ser executadas pelo Agent Workspace.')
+    service = ctx.mission_service
+    if service is not None:
+        async with service.workspace_gate:
+            project = await ctx.project_service.get_project(task.project_id)
+            path = str(await asyncio.to_thread(Path(project.workspace_path or '.').resolve))
+            if await service.repo.workspace_busy(path):
+                raise ValidationError('Uma missão possui este diretório. Pause-a antes da execução clássica.')
+            if any(Path(path).is_relative_to(p) or Path(p).is_relative_to(path) for p in service.legacy_workspaces):
+                raise ValidationError('Outra execução clássica possui este diretório.')
+            service.legacy_workspaces.add(path)
+
+        async def run_classic() -> None:
+            try:
+                await ctx.engine.run(task)
+            finally:
+                service.legacy_workspaces.discard(path)
+
+        asyncio.create_task(run_classic())
+    else:
+        asyncio.create_task(ctx.engine.run(task))
     return {"task_id": task.id, "status": "started"}
 
 
@@ -914,3 +936,28 @@ def _require_provider(params: dict[str, Any]) -> str:
             f"Unknown provider '{provider}'. Supported providers: {', '.join(SUPPORTED_PROVIDERS)}.",
         )
     return provider
+
+
+@handler(BridgeCommand.MISSION_CREATE)
+async def _mission_create(params: dict[str, Any], ctx: BridgeContext) -> dict[str, Any]:
+    assert ctx.mission_service is not None
+    return (await ctx.mission_service.create(MissionCreate.model_validate(params))).model_dump(mode="json")
+
+
+@handler(BridgeCommand.MISSION_LIST)
+async def _mission_list(params: dict[str, Any], ctx: BridgeContext) -> list[Any]:
+    assert ctx.mission_service is not None
+    project_id = _require_str(params, "project_id")
+    return [m.model_dump(mode="json") for m in await ctx.mission_service.repo.missions(project_id)]
+
+
+@handler(BridgeCommand.MISSION_GET)
+async def _mission_get(params: dict[str, Any], ctx: BridgeContext) -> dict[str, Any]:
+    assert ctx.mission_service is not None
+    return (await ctx.mission_service.repo.snapshot(_require_str(params, "mission_id"))).model_dump(mode="json")
+
+
+@handler(BridgeCommand.MISSION_COMMAND)
+async def _mission_command(params: dict[str, Any], ctx: BridgeContext) -> dict[str, Any]:
+    assert ctx.mission_service is not None
+    return (await ctx.mission_service.command(MissionCommand.model_validate(params))).model_dump(mode="json")

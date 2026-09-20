@@ -56,6 +56,7 @@ from pathlib import Path
 
 from core.utils.errors import CancelledErrorX, ToolDeniedError
 from core.utils.platform import is_windows
+from core.utils.process_observer import ProcessObservation, observe
 
 _DEFAULT_MAX_OUTPUT_BYTES = 1 * 1024 * 1024  # 1 MiB per stream
 _GRACE_PERIOD_SECONDS = 3.0
@@ -93,16 +94,24 @@ class RunResult:
     returncode: int
 
 
-async def _read_capped(stream: asyncio.StreamReader, max_bytes: int) -> bytes:
+async def _read_capped(stream: asyncio.StreamReader, max_bytes: int, *, observed: bool = False) -> bytes:
     """Drain `stream` to EOF, keeping only the first `max_bytes`. Draining
     past the cap (rather than stopping) prevents a chatty child from
     blocking forever on a full pipe buffer once we stop reading."""
     chunks: list[bytes] = []
     total = 0
+    pending = b""
     while True:
         chunk = await stream.read(65536)
         if not chunk:
             break
+        if observed and total < max_bytes:
+            pending += chunk
+            while b"\n" in pending:
+                line, pending = pending.split(b"\n", 1)
+                await observe(ProcessObservation('stdout', line=line[:65536].decode('utf-8', errors='replace')))
+            if len(pending) > 65536:
+                pending = b""
         if total < max_bytes:
             room = max_bytes - total
             chunks.append(chunk[:room])
@@ -180,6 +189,12 @@ async def _exec(
     except FileNotFoundError as exc:
         raise ToolDeniedError(f"Executable not found: {argv[0]!r}") from exc
 
+    try:
+        await observe(ProcessObservation('started', pid=process.pid))
+    except BaseException:
+        await _terminate_process_tree(process)
+        raise
+
     async def _write_stdin() -> None:
         if stdin_data is None:
             return
@@ -201,7 +216,7 @@ async def _exec(
         # buffer while waiting on the other side.
         _, stdout_bytes, stderr_bytes = await asyncio.gather(
             _write_stdin(),
-            _read_capped(process.stdout, max_stdout_bytes),
+            _read_capped(process.stdout, max_stdout_bytes, observed=True),
             _read_capped(process.stderr, max_stderr_bytes),
         )
         return stdout_bytes, stderr_bytes
@@ -213,7 +228,15 @@ async def _exec(
         cancel_wait_task = asyncio.ensure_future(cancel_event.wait())
         wait_tasks.append(cancel_wait_task)
 
-    done, _ = await asyncio.wait(wait_tasks, timeout=timeout, return_when=asyncio.FIRST_COMPLETED)
+    try:
+        done, _ = await asyncio.wait(wait_tasks, timeout=timeout, return_when=asyncio.FIRST_COMPLETED)
+    except asyncio.CancelledError:
+        collect_task.cancel()
+        if cancel_wait_task is not None:
+            cancel_wait_task.cancel()
+        await _terminate_process_tree(process)
+        await asyncio.gather(collect_task, return_exceptions=True)
+        raise
 
     if cancel_wait_task is not None and cancel_wait_task in done:
         collect_task.cancel()
@@ -229,7 +252,11 @@ async def _exec(
 
     if cancel_wait_task is not None:
         cancel_wait_task.cancel()
-    stdout_bytes, stderr_bytes = collect_task.result()
+    try:
+        stdout_bytes, stderr_bytes = collect_task.result()
+    except BaseException:
+        await _terminate_process_tree(process)
+        raise
     await process.wait()
 
     return RunResult(
@@ -303,3 +330,28 @@ def get_runner() -> ShellRunner:
     "is this Windows?" purely to decide how to run a subprocess.
     """
     return PowerShellRunner() if is_windows() else PosixRunner()
+
+
+def process_is_alive(pid: int) -> bool:
+    """Conservative recovery probe. Never signal or kill a potentially reused PID."""
+    if pid <= 0:
+        return False
+    if is_windows():
+        import ctypes
+        from ctypes import wintypes
+        kernel = ctypes.WinDLL('kernel32', use_last_error=True)  # type: ignore[attr-defined]
+        kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel.OpenProcess.restype = wintypes.HANDLE
+        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+        handle = kernel.OpenProcess(0x1000, False, pid)
+        if not handle:
+            return ctypes.get_last_error() == 5  # type: ignore[attr-defined]  # access denied => conservatively alive
+        kernel.CloseHandle(handle)
+        return True
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True

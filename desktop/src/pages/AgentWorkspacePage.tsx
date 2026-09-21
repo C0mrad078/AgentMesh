@@ -93,6 +93,7 @@ export function AgentWorkspacePage() {
           {projects.projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
         </select></label>
         <span role="status">Bridge: {connection}</span>
+        <Button size="sm" variant="outline" onClick={() => useUiStore.getState().openDelivery()}>Delivery Center</Button>
         <Button size="sm" variant="outline" onClick={() => setPage('office')}>Pixel Office</Button>
         <Button size="sm" variant="outline" onClick={() => setPage('providers')}>Conexões</Button>
       </header>

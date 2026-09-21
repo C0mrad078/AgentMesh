@@ -103,7 +103,7 @@ class WorktreeManager:
         if not merge.success:
             # Abort only this temporary integration operation; no user branch is touched.
             await self.git(integration_root, ["merge", "--abort"])
-            return False, "", merge.stderr[:1000]
+            return False, "", (merge.stderr + "\n" + merge.stdout)[:2000]
         head = await self.git(integration_root, ["rev-parse", "HEAD"])
         return True, head.stdout.strip(), ""
 

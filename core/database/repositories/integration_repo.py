@@ -54,11 +54,23 @@ class IntegrationRepository:
         await self.db.execute(f"UPDATE integration_conflicts SET {', '.join(fields)} WHERE id=?", tuple(values))
 
     async def add_attempt(self, value: ResolutionAttempt) -> None:
-        await self.db.execute("INSERT INTO resolution_attempts(id,conflict_id,attempt_no,status,worktree_id,integrator_session_id,proposal_artifact_id,commit_sha,strategy,data,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)", (value.id,value.conflict_id,value.attempt_no,value.status,value.worktree_id,value.integrator_session_id,value.proposal_artifact_id,value.commit_sha,value.strategy,dumps(value.data),value.created_at.isoformat(),value.updated_at.isoformat()))
+        await self.db.execute("INSERT INTO resolution_attempts(id,conflict_id,attempt_no,status,worktree_id,integrator_session_id,proposal_artifact_id,commit_sha,strategy,data,created_at,updated_at,resolution_path,resolution_branch) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (value.id,value.conflict_id,value.attempt_no,value.status,value.worktree_id,value.integrator_session_id,value.proposal_artifact_id,value.commit_sha,value.strategy,dumps(value.data),value.created_at.isoformat(),value.updated_at.isoformat(),value.resolution_path,value.resolution_branch))
 
     async def attempts(self, conflict_id: str) -> list[ResolutionAttempt]:
         rows = await self.db.fetch_all("SELECT * FROM resolution_attempts WHERE conflict_id=? ORDER BY attempt_no", (conflict_id,))
-        return [ResolutionAttempt(id=r["id"], conflict_id=r["conflict_id"], attempt_no=r["attempt_no"], status=r["status"], worktree_id=r["worktree_id"], integrator_session_id=r["integrator_session_id"], proposal_artifact_id=r["proposal_artifact_id"], commit_sha=r["commit_sha"], strategy=r["strategy"], data=loads(r["data"], {}), created_at=r["created_at"], updated_at=r["updated_at"]) for r in rows]
+        return [ResolutionAttempt(id=r["id"], conflict_id=r["conflict_id"], attempt_no=r["attempt_no"], status=r["status"], worktree_id=r["worktree_id"], integrator_session_id=r["integrator_session_id"], proposal_artifact_id=r["proposal_artifact_id"], commit_sha=r["commit_sha"], strategy=r["strategy"], data=loads(r["data"], {}), created_at=r["created_at"], updated_at=r["updated_at"], resolution_path=r["resolution_path"], resolution_branch=r["resolution_branch"]) for r in rows]
+
+    async def update_attempt(self, attempt_id: str, **patch: object) -> None:
+        allowed = {"status", "commit_sha", "strategy", "data"}
+        if set(patch) - allowed:
+            raise ValueError("unsupported resolution attempt patch")
+        assignments = ["updated_at=?"]
+        values: list[object] = [utc_now().isoformat()]
+        for key, value in patch.items():
+            assignments.append(f"{key}=?")
+            values.append(dumps(value) if key == "data" else value)
+        values.append(attempt_id)
+        await self.db.execute(f"UPDATE resolution_attempts SET {', '.join(assignments)} WHERE id=?", tuple(values))
 
     async def add_review(self, value: ResolutionReview) -> None:
         await self.db.execute("INSERT INTO resolution_reviews(id,conflict_id,attempt_id,reviewer_session_id,verdict,findings,created_at) VALUES(?,?,?,?,?,?,?)", (value.id,value.conflict_id,value.attempt_id,value.reviewer_session_id,value.verdict,dumps(value.findings),value.created_at.isoformat()))

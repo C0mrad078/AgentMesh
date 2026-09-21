@@ -16,7 +16,16 @@ from typing import TYPE_CHECKING, TypeVar
 from pydantic import BaseModel
 
 from core.database.repositories.missions_repo import MissionsRepository
-from core.integration.models import ConflictFile, IntegrationConflict, classify_conflict
+from core.integration.models import (
+    ConflictFile,
+    IntegrationConflict,
+    IntegrationProposal,
+    ResolutionAttempt,
+    ResolutionDecision,
+    ResolutionReview,
+    classify_conflict,
+)
+from core.integration.quality_gates import validate_gate
 from core.missions.evidence import describe_changes, snapshot_files
 from core.missions.models import (
     AgentMessage,
@@ -749,12 +758,145 @@ class MissionService:
         value = IntegrationConflict(id=conflict_id, mission_id=mission.id, status='detected',
             classification=files[0].classification if files else 'unknown', base_sha=base_sha,
             ours_sha=base_sha, theirs_sha=head, integration_head=base_sha,
-            data={'message': self.clean(message), 'source_branch': branch}, files=files,
+            data={'message': self.clean(message), 'source_branch': branch,
+                  'integration_branch': f'agentmash/mission-{mission.id}/integration'}, files=files,
             created_at=now, updated_at=now)
         await self.ctx.integration_repo.add_conflict(value)
 
+    async def assist_conflict(self, mission_id: str, conflict_id: str,
+                              integrator_agent_id: str, reviewer_agent_id: str) -> dict[str, object]:
+        """Run one real, bounded integrator -> reviewer resolution attempt.
+
+        The integration worktree is separate from the user's checkout. The
+        method is idempotent for an already proposed/approved attempt and
+        leaves the branch untouched until :meth:`approve_conflict` is called.
+        """
+        mission = await self.repo.get(Mission, mission_id)
+        conflicts = await self.ctx.integration_repo.list_conflicts(mission_id)
+        conflict = next((item for item in conflicts if item.id == conflict_id), None)
+        if conflict is None:
+            raise ValidationError('Conflito de integração inexistente.')
+        previous = await self.ctx.integration_repo.attempts(conflict_id)
+        if previous and previous[-1].status in {'resolution_proposed', 'reviewing', 'awaiting_human_approval', 'resolved'}:
+            return previous[-1].model_dump(mode='json')
+        if integrator_agent_id == reviewer_agent_id:
+            raise ValidationError('O integrador e o reviewer precisam ser Agents diferentes.')
+        workspace = await self.workspace(mission)
+        project_root = await asyncio.to_thread(lambda: Path(workspace).resolve())
+        root = self.worktrees.root_for(project_root)
+        attempt_no = len(previous) + 1
+        resolution_path = (root / f'resolution-{conflict.id}-{attempt_no}').resolve()
+        if not resolution_path.is_relative_to(root.resolve()):
+            raise ValidationError('Worktree de resolução fora da raiz controlada.')
+        branch = f'agentmash/mission-{mission.id}/resolution-{attempt_no}'
+        integration_branch = str(conflict.data.get('integration_branch', f'agentmash/mission-{mission.id}/integration'))
+        source_branch = str(conflict.data.get('source_branch', ''))
+        root.mkdir(parents=True, exist_ok=True)
+        if not resolution_path.exists():
+            created = await self.worktrees.git(project_root, ['worktree', 'add', '-b', branch, str(resolution_path), integration_branch])
+            if not created.success:
+                raise MissionBlocked('Não foi possível criar a worktree de resolução: ' + created.stderr[:800])
+        merge = await self.worktrees.git(resolution_path, ['merge', '--no-edit', '--no-commit', source_branch])
+        if merge.success:
+            raise MissionBlocked('O conflito não se reproduziu na worktree de resolução; nenhuma resolução foi fabricada.')
+        now = utc_now()
+        stage_context: dict[str, dict[str, str]] = {}
+        for file in conflict.files:
+            stages: dict[str, str] = {}
+            for label, ref in (('base', ':1:'), ('ours', ':2:'), ('theirs', ':3:')):
+                staged = await self.worktrees.git(resolution_path, ['show', f'{ref}{file.path}'])
+                if staged.success:
+                    stages[label] = self.clean(staged.stdout[:100000])
+            stage_context[file.path] = stages
+        integrator = await self.new_session(mission, Choice(agent_id=integrator_agent_id, role='integrator', reason='Agente integrador independente dos autores'), workspace=str(resolution_path), isolation='resolution')
+        attempt = ResolutionAttempt(id=new_id('resolution'), conflict_id=conflict_id, attempt_no=attempt_no,
+            status='analyzing', integrator_session_id=integrator.id, strategy='', data={'base_sha': conflict.base_sha, 'ours_sha': conflict.ours_sha, 'theirs_sha': conflict.theirs_sha, 'stages': stage_context}, created_at=now, updated_at=now, resolution_path=str(resolution_path), resolution_branch=branch)
+        await self.ctx.integration_repo.add_attempt(attempt)
+        await self.ctx.integration_repo.update_conflict(conflict_id, status='analyzing', integrator_session_id=integrator.id)
+        snapshot = await self.repo.snapshot(mission_id)
+        workers = [a for a in snapshot.assignments if a.role == 'worker' and a.active]
+        prompt = (f'Você é o integrador independente. Resolva o conflito nesta worktree, editando os arquivos e preservando os dois comportamentos.\n'
+                  f'Pedido: {mission.request}\nBase: {conflict.base_sha}\nOurs: {conflict.ours_sha}\nTheirs: {conflict.theirs_sha}\n'
+                  f'Arquivos: {[f.path for f in conflict.files]}\nForecast: {conflict.data}\n'
+                  'Inspecione stages base/ours/theirs, não descarte silenciosamente nenhum lado. Se precisar de contexto, registre uma pergunta curta no campo question. Depois execute testes direcionados e retorne estratégia, decisões por arquivo, riscos e testes.')
+        proposal = await self.turn(mission_id, integrator, prompt, IntegrationProposal, writable=True)
+        question_text = proposal.question or ('Confirme a intenção preservada no contrato e qualquer comportamento que não possa ser removido.')
+        if workers:
+            await self.ctx.integration_repo.update_conflict(conflict_id, status='awaiting_context')
+            for assignment in workers[:2]:
+                worker = await self.repo.sessions.get_or_raise(assignment.session_id)
+                question = await self.message(mission_id, integrator.id, worker.id, 'question', question_text, assignment.task_id)
+                answer = await self.turn(mission_id, worker, f'Responda ao integrador sobre esta pergunta, sem editar arquivos: {question_text}', WorkerOutput)
+                await self.message(mission_id, worker.id, integrator.id, 'answer', answer.summary, assignment.task_id, reply_to=question.id)
+        await self.ctx.integration_repo.update_conflict(conflict_id, status='resolution_proposed')
+        add = await self.worktrees.git(resolution_path, ['add', '--', '.'])
+        if not add.success:
+            raise MissionBlocked('Integrador não deixou uma resolução aplicável: ' + add.stderr[:800])
+        commit = await self.worktrees.git(resolution_path, ['commit', '-m', f'Resolve integration conflict {conflict_id}'])
+        if not commit.success:
+            raise MissionBlocked('Não foi possível registrar a proposta do integrador: ' + commit.stderr[:800])
+        head = await self.worktrees.git(resolution_path, ['rev-parse', 'HEAD'])
+        await self.ctx.integration_repo.update_conflict(conflict_id, status='reviewing', reviewer_session_id=None)
+        await self.ctx.integration_repo.update_attempt(attempt.id, status='reviewing', commit_sha=head.stdout.strip(), strategy=proposal.strategy, data=proposal.model_dump(mode='json'))
+        reviewer = await self.new_session(mission, Choice(agent_id=reviewer_agent_id, role='reviewer', reason='Reviewer independente do integrador'), workspace=str(resolution_path), isolation='resolution-review')
+        await self.ctx.integration_repo.update_conflict(conflict_id, status='reviewing', reviewer_session_id=reviewer.id)
+        review = await self.turn(mission_id, reviewer, f'Revise a resolução commit {head.stdout.strip()} em modo somente leitura. Verifique preservação das duas tarefas, segurança, contratos e testes. Diff: {proposal.model_dump_json()}', ReviewOutput)
+        verdict = 'approved' if review.verdict == 'approval' else review.verdict
+        await self.ctx.integration_repo.add_review(ResolutionReview(id=new_id('resolution_review'), conflict_id=conflict_id, attempt_id=attempt.id, reviewer_session_id=reviewer.id, verdict=verdict, findings=[{'severity': 'high' if verdict != 'approved' else 'info', 'explanation': review.justification, 'action': '; '.join(review.challenges)}], created_at=utc_now()))
+        if verdict != 'approved':
+            await self.ctx.integration_repo.update_conflict(conflict_id, status='changes_requested')
+            return {'conflict_id': conflict_id, 'status': 'changes_requested', 'review': review.model_dump(mode='json')}
+        gate = await self.run_quality_gate(mission, resolution_path, None, 'resolution quality gates')
+        if not gate.passed:
+            await self.ctx.integration_repo.update_conflict(conflict_id, status='blocked')
+            return {'conflict_id': conflict_id, 'status': 'blocked', 'gate': gate.model_dump(mode='json')}
+        await self.ctx.integration_repo.update_conflict(conflict_id, status='awaiting_human_approval')
+        return {'conflict_id': conflict_id, 'status': 'awaiting_human_approval', 'attempt_id': attempt.id, 'integrator_session_id': integrator.id, 'reviewer_session_id': reviewer.id, 'commit_sha': head.stdout.strip(), 'resolution_branch': branch}
+
+    async def approve_conflict(self, conflict_id: str, rationale: str) -> None:
+        row = await self.ctx.db.fetch_one('SELECT mission_id FROM integration_conflicts WHERE id=?', (conflict_id,))
+        if row is None:
+            raise ValidationError('Conflito inexistente.')
+        conflicts = await self.ctx.integration_repo.list_conflicts(row['mission_id'])
+        conflict = next((item for item in conflicts if item.id == conflict_id), None)
+        if conflict is None:
+            raise ValidationError('Conflito inexistente.')
+        attempts = await self.ctx.integration_repo.attempts(conflict_id)
+        if not attempts or not attempts[-1].commit_sha or not attempts[-1].resolution_branch:
+            raise ValidationError('Não há resolução revisada aguardando aprovação.')
+        mission = await self.repo.get(Mission, conflict.mission_id)
+        workspace = await self.workspace(mission)
+        root = await asyncio.to_thread(lambda: Path(workspace).resolve())
+        integration = self.worktrees.root_for(root) / 'integration'
+        merged = await self.worktrees.git(integration, ['merge', '--ff-only', attempts[-1].resolution_branch])
+        if not merged.success:
+            raise MissionBlocked('A integration branch mudou; revalide a resolução antes de aplicar.')
+        await self.ctx.integration_repo.add_decision(ResolutionDecision(id=new_id('resolution_decision'), conflict_id=conflict_id, attempt_id=attempts[-1].id, decision='approved', rationale=self.clean(rationale), created_at=utc_now()))
+        await self.ctx.integration_repo.update_conflict(conflict_id, status='resolved')
+
     async def run_quality_gate(self, mission: Mission, root: Path, task_id: str | None,
                                name: str) -> QualityGateRun:
+        profiles = await self.ctx.integration_repo.list_profiles(mission.project_id)
+        profile = next((item for item in profiles if item.is_default), None)
+        if profile:
+            last: QualityGateRun | None = None
+            for definition in sorted((gate for gate in profile.gates if gate.enabled), key=lambda gate: gate.order):
+                validate_gate(definition, root)
+                started = asyncio.get_running_loop().time()
+                result = await get_runner().run(definition.argv, cwd=root / definition.cwd,
+                                                timeout=definition.timeout_seconds,
+                                                cancel_event=self.cancel_events.get(mission.id))
+                last = QualityGateRun(id=new_id('gate'), mission_id=mission.id, task_id=task_id,
+                    name=f'{profile.name}: {definition.name}', command=definition.argv, exit_code=result.returncode,
+                    duration_ms=int((asyncio.get_running_loop().time() - started) * 1000),
+                    summary=self.clean((result.stdout + '\n' + result.stderr)[:definition.log_limit]),
+                    passed=result.success, created_at=utc_now())
+                await self.ctx.parallel_repo.add_gate(last)
+                await self.artifact(mission.id, 'test', last.name, last.summary, command=last.command, exit_code=last.exit_code)
+                if definition.required and not last.passed:
+                    return last
+            if last is not None:
+                return last
         planner = CommandPlanner(root)
         command = planner.resolve(ProjectAction.RUN_TESTS)
         if command is None:

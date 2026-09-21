@@ -16,7 +16,7 @@ MissionStatus = Literal['draft', 'analyzing', 'planned', 'awaiting_approval', 'r
 MessageType = Literal['question', 'answer', 'context_share', 'handoff', 'review_request',
                       'review_challenge', 'changes_requested', 'fix_response', 'approval',
                       'blocker', 'human_input_required']
-Role = Literal['leader', 'worker', 'reviewer']
+Role = Literal['leader', 'worker', 'reviewer', 'integrator']
 
 
 class Contract(BaseModel):

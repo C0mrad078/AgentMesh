@@ -7,6 +7,7 @@ ROLE_CAPABILITIES = {
     'leader': {'planning', 'architecture'},
     'worker': {'coding', 'debugging', 'refactoring'},
     'reviewer': {'code_review', 'review', 'testing'},
+    'integrator': {'coding', 'refactoring', 'code_review', 'review'},
 }
 
 
@@ -23,7 +24,7 @@ def choose_agent(agents: list[Agent], *, role: Role, connected: set[str],
             continue
         if role == 'worker' and (not agent.permissions.can_write_files or not wanted <= caps):
             continue
-        if role == 'reviewer' and not agent.permissions.can_run_terminal:
+        if role in {'reviewer', 'integrator'} and not agent.permissions.can_run_terminal:
             continue
         # CLI subscription monetary pricing cannot be guaranteed. Fail closed for
         # personas with a monetary ceiling until runtime accounting can enforce it.

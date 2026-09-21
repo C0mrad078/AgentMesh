@@ -231,7 +231,7 @@ _STANDARD_AGENTS: list[Agent] = [
 
 # Explicit, independently persisted identities; never create a reviewer by copying
 # the working Session or allowing a worker to approve its own implementation.
-_COLLAB_NAMES = {'leader': 'Orchestrator', 'worker_atlas': 'Atlas', 'worker_nova': 'Nova', 'reviewer': 'Sentinel'}
+_COLLAB_NAMES = {'leader': 'Orchestrator', 'worker_atlas': 'Atlas', 'worker_nova': 'Nova', 'reviewer': 'Sentinel', 'integrator': 'Vega'}
 _COLLABORATION_AGENTS = [
     Agent(
         id=f"agent_{provider}_{role}", name=f"{label} {_COLLAB_NAMES[role]}",
@@ -243,9 +243,10 @@ _COLLABORATION_AGENTS = [
     )
     for provider, label in [("codex_cli", "Codex CLI"), ("claude_code_cli", "Claude Code")]
     for role, capabilities in [("leader", ["planning", "architecture"]),
-                               ("worker_atlas", ["coding", "debugging", "refactoring", "testing"]),
-                               ("worker_nova", ["coding", "debugging", "refactoring", "testing"]),
-                               ("reviewer", ["code_review", "testing"])]
+                               ("worker_atlas", ["coding", "debugging", "refactoring", "testing", "code_review"]),
+                               ("worker_nova", ["coding", "debugging", "refactoring", "testing", "code_review"]),
+                               ("reviewer", ["code_review", "testing"]),
+                               ("integrator", ["coding", "refactoring", "code_review", "testing"])]
 ]
 DEFAULT_AGENTS: list[Agent] = [*_MOCK_AGENTS, *_STANDARD_AGENTS, *_COLLABORATION_AGENTS]
 

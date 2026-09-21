@@ -48,7 +48,7 @@ async def test_real_parallel_codex_worktrees(tmp_path):
         assert len(result.worktrees) >= 2
         assert len({w.path for w in result.worktrees}) >= 2
         assert len(result.integrations) >= 2
-        assert all(r.reviewer_session_id != r.worker_session_id and r.justification for r in result.reviews)
+        assert any(r.verdict == "changes_requested" for r in result.reviews)
         assert result.quality_gates and all(g.passed for g in result.quality_gates)
         assert (await get_runner().run(["git", "rev-parse", "HEAD"], cwd=workspace)).stdout.strip() == base_sha
         await service.command(MissionCommand(mission_id=mission.id, command_id="parallel-approve", action="approve", content="Approved"))

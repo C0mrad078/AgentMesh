@@ -78,6 +78,8 @@ class ResolutionAttempt(BaseModel):
     data: dict = Field(default_factory=dict)
     created_at: datetime
     updated_at: datetime
+    resolution_path: str | None = None
+    resolution_branch: str | None = None
 
 
 class ResolutionReview(BaseModel):
@@ -98,6 +100,16 @@ class ResolutionDecision(BaseModel):
     rationale: str = ""
     actor_session_id: str | None = None
     created_at: datetime
+
+
+class IntegrationProposal(BaseModel):
+    strategy: str = Field(min_length=1, max_length=12000)
+    files: list[str] = Field(default_factory=list, max_length=100)
+    decisions: list[str] = Field(default_factory=list, max_length=100)
+    preserved_behaviors: list[str] = Field(default_factory=list, max_length=100)
+    risks: list[str] = Field(default_factory=list, max_length=50)
+    tests: list[list[str]] = Field(default_factory=list, max_length=20)
+    question: str | None = None
 
 
 class QualityGateDefinition(BaseModel):

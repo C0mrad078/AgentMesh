@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import asdict
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -228,11 +229,27 @@ async def _integration_conflict_list(params: dict[str, Any], ctx: BridgeContext)
     return [c.model_dump(mode="json") for c in await ctx.integration_repo.list_conflicts(_require_str(params, "mission_id"))]
 
 
+@handler(BridgeCommand.INTEGRATION_CONFLICT_ASSIST)
+async def _integration_conflict_assist(params: dict[str, Any], ctx: BridgeContext) -> dict[str, Any]:
+    mission_id = _require_str(params, "mission_id")
+    conflict_id = _require_str(params, "conflict_id")
+    integrator = _require_str(params, "integrator_agent_id")
+    reviewer = _require_str(params, "reviewer_agent_id")
+    if ctx.mission_service is None:
+        raise ValidationError('Mission service indisponível.')
+    return await ctx.mission_service.assist_conflict(mission_id, conflict_id, integrator, reviewer)
+
+
 @handler(BridgeCommand.INTEGRATION_CONFLICT_DECIDE)
 async def _integration_conflict_decide(params: dict[str, Any], ctx: BridgeContext) -> dict[str, Any]:
-    decision = ResolutionDecision.model_validate(params)
-    await ctx.integration_repo.add_decision(decision)
-    await ctx.integration_repo.update_conflict(decision.conflict_id, status="resolved" if decision.decision == "approved" else "rejected")
+    decision = ResolutionDecision.model_validate({**params, "created_at": params.get("created_at", datetime.now(UTC))})
+    if decision.decision == "approved":
+        if ctx.mission_service is None:
+            raise ValidationError('Mission service indisponível.')
+        await ctx.mission_service.approve_conflict(decision.conflict_id, decision.rationale)
+    else:
+        await ctx.integration_repo.add_decision(decision)
+        await ctx.integration_repo.update_conflict(decision.conflict_id, status="rejected" if decision.decision == "rejected" else "changes_requested")
     return decision.model_dump(mode="json")
 
 

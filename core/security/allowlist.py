@@ -39,6 +39,7 @@ class BridgeCommand(str, Enum):
     QUALITY_GATE_PROFILE_SAVE = "quality_gate.profile.save"
     QUALITY_GATE_PROFILE_DELETE = "quality_gate.profile.delete"
     INTEGRATION_CONFLICT_LIST = "integration.conflict.list"
+    INTEGRATION_CONFLICT_ASSIST = "integration.conflict.assist"
     INTEGRATION_CONFLICT_DECIDE = "integration.conflict.decide"
 
     TEAM_CREATE = "team.create"

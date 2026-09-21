@@ -37,6 +37,8 @@ async def test_mission_migration_empty_and_existing(tmp_path, monkeypatch, upgra
         assert 14 in await runner.applied_versions(db.connection)
         assert 15 in await runner.applied_versions(db.connection)
         assert 16 in await runner.applied_versions(db.connection)
+        assert 17 in await runner.applied_versions(db.connection)
+        assert 18 in await runner.applied_versions(db.connection)
         repo = MissionsRepository(db)
         mission = Mission(id='mission', project_id=project.id, request='test', created_at=utc_now(), updated_at=utc_now())
         await repo.put(mission, command_id='first')

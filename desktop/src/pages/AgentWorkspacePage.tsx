@@ -3,7 +3,7 @@ import { Background, Controls, MiniMap, ReactFlow } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { Button } from '@/components/ui/button';
 import { agentsApi, providerCliApi, settingsApi } from '@/services/api';
-import { onBridgeEvent } from '@/services/bridge';
+import { invokeBridge, onBridgeEvent } from '@/services/bridge';
 import { useProjectsStore } from '@/stores/projectsStore';
 import { useUiStore } from '@/stores/uiStore';
 import { useConnectionStore } from '@/stores/connectionStore';
@@ -27,6 +27,7 @@ export function AgentWorkspacePage() {
   const [filter, setFilter] = useState('');
   const [selectedAgent, setSelectedAgent] = useState('');
   const [selectedTask, setSelectedTask] = useState('');
+  const [resolvingConflict, setResolvingConflict] = useState<string | null>(null);
   const composer = useRef<HTMLTextAreaElement>(null);
   const setPage = useUiStore(s => s.setActivePage);
   const pid = projects.selectedProjectId;
@@ -147,6 +148,7 @@ export function AgentWorkspacePage() {
               {snapshot.integrations?.map(i => <p key={i.id}>Integração {i.result}: {i.source_branch} → {i.integration_branch}{i.commit_sha ? ` (${i.commit_sha.slice(0, 8)})` : ''}</p>)}
               {snapshot.quality_gates?.map(g => <p key={g.id}>Quality gate {g.name}: {g.passed ? 'aprovado' : `falhou (exit ${g.exit_code})`}</p>)}
               {snapshot.conflicts?.map(c => <p key={c.id} className="text-amber-600">Conflito {c.classification}: {c.status} · {c.files?.map(f => f.path).join(', ') || 'aguarda análise assistida'}</p>)}
+              {snapshot.conflicts?.filter(c => c.status === 'detected' || c.status === 'awaiting_analysis' || c.status === 'changes_requested').map(c => <Button key={`assist-${c.id}`} size="sm" variant="outline" disabled={resolvingConflict === c.id} onClick={() => { const integrator = agents.find(a => a.name.endsWith('Vega'))?.id; const reviewer = agents.find(a => a.name.endsWith('Sentinel'))?.id; if (!integrator || !reviewer || !mission) return; setResolvingConflict(c.id); void invokeBridge('integration.conflict.assist', { mission_id: mission.id, conflict_id: c.id, integrator_agent_id: integrator, reviewer_agent_id: reviewer }).finally(() => setResolvingConflict(null)); }}>Iniciar resolução assistida</Button>)}
             </details> : null}
           </main>
           <aside className="workspace-details" aria-label="Detalhes e conversa">

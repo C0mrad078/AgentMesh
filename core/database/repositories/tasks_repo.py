@@ -30,6 +30,7 @@ def _row_to_task(row: aiosqlite.Row) -> Task:
         assigned_agent_id=row["assigned_agent_id"],
         assigned_team_id=row["assigned_team_id"],
         session_id=row["session_id"],
+        waiting_reason=row["waiting_reason"] if "waiting_reason" in row.keys() else "",
     )
 
 
@@ -89,6 +90,7 @@ class TasksRepository:
         result: dict | None = None,
         started_at: str | None = None,
         completed_at: str | None = None,
+        waiting_reason: str | None = None,
     ) -> Task:
         current = await self.get_or_raise(task_id)
         now = utc_now().isoformat()
@@ -97,7 +99,7 @@ class TasksRepository:
             UPDATE tasks
             SET status = ?, result = COALESCE(?, result), updated_at = ?,
                 started_at = COALESCE(?, started_at),
-                completed_at = COALESCE(?, completed_at)
+                completed_at = COALESCE(?, completed_at), waiting_reason = COALESCE(?, waiting_reason)
             WHERE id = ?
             """,
             (
@@ -106,6 +108,7 @@ class TasksRepository:
                 now,
                 started_at,
                 completed_at,
+                waiting_reason,
                 task_id,
             ),
         )

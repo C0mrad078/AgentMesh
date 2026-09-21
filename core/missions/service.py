@@ -128,13 +128,15 @@ class MissionService:
         async with self._commands:
             existing = await self.repo.by_command(data.command_id)
             if existing:
-                if existing.project_id != data.project_id or existing.request != self.clean(data.request):
+                if (existing.project_id != data.project_id or existing.request != self.clean(data.request)
+                        or existing.planning_policy != data.planning_policy):
                     raise ValidationError('Command id already used for different mission')
                 return existing
             await self.ctx.project_service.get_project(data.project_id)
             now = utc_now()
             mission = Mission(id=new_id('mission'), project_id=data.project_id,
-                              request=self.clean(data.request), created_at=now, updated_at=now)
+                              request=self.clean(data.request), planning_policy=data.planning_policy,
+                              created_at=now, updated_at=now)
             await self.repo.put(mission, command_id=data.command_id)
             await self.notify(mission.id)
             return mission
@@ -523,7 +525,10 @@ class MissionService:
         mission = await self.repo.get(Mission, mid)
         await self.status(mid, 'analyzing')
         await self.load_execution_limits()
-        envelope = self.execution_envelope()
+        envelope = self.execution_envelope().model_copy(update={
+            'max_workers': min(self.execution_envelope().max_workers, mission.planning_policy.desired_workstreams),
+            'max_implementation_tasks': mission.planning_policy.max_implementation_tasks,
+        })
         leader_choice = await self.choose(mission, 'leader')
         leader = await self.new_session(mission, leader_choice)
         agents = await self.ctx.agents_repo.list()
@@ -545,11 +550,36 @@ class MissionService:
         plan = await self.turn(mid, leader,
             f'Analise o repositório e proponha tarefas para: {mission.request}\nInstruções adicionais: {extra}\n'
             f'Catálogo real: {json.dumps(catalog)}\n'
-            f'Execution Envelope obrigatório: {envelope.model_dump_json()}\n'
+            f'Execution Envelope obrigatório: {envelope.model_dump_json()}\nPlanningPolicy: {mission.planning_policy.model_dump_json()}\n'
             'Use capacidades do catálogo. Inclua critérios verificáveis e dependências. '
             'Classifique cada etapa como implementation, review, integration, qa ou control. '
             'Não crie etapas sistêmicas como workers. Não implemente agora. A implementação e a revisão serão atribuídas pelo backend.', PlanOutput)
-        plan = self.normalize_plan(plan, envelope)
+        try:
+            plan = self.normalize_plan(plan, envelope)
+        except ValidationError:
+            if mission.planning_policy.mode != 'bounded':
+                raise
+            plan = await self.turn(mid, leader,
+                f'A PlanningPolicy bounded limita implementation tasks a {mission.planning_policy.max_implementation_tasks} '
+                f'e exige {mission.planning_policy.desired_workstreams} workstreams. Combine passos em internal_steps, '
+                'preservando critérios, arquivos e testes; retorne somente workstreams implementation.', PlanOutput)
+            plan = self.normalize_plan(plan, envelope)
+        if mission.planning_policy.mode == 'bounded':
+            implementation = [task for task in plan.tasks if task.kind == 'implementation']
+            if not mission.planning_policy.allow_additional_workstreams:
+                desired = mission.planning_policy.desired_workstreams
+                if len(implementation) != desired:
+                    plan = await self.turn(mid, leader,
+                        f'Você retornou {len(implementation)} workstreams, mas a PlanningPolicy bounded exige '
+                        f'exatamente {desired}. Preserve todos os critérios e testes: combine passos sequenciais '
+                        'como internal_steps quando houver trabalho demais; se houver trabalho de menos, separe os '
+                        'dois workstreams semanticamente solicitados em Tasks implementation independentes. '
+                        'Retorne exatamente esse número de Tasks implementation, sem review, integração ou QA.', PlanOutput)
+                    plan = self.normalize_plan(plan, envelope)
+                    implementation = [task for task in plan.tasks if task.kind == 'implementation']
+                    if len(implementation) != desired:
+                        raise ValidationError(
+                            f'Plano bounded retornou {len(implementation)} workstreams após a reformulação; esperado {desired}.')
         # One bounded reformulation is safer than starting an impossible
         # mission. The leader must produce at least one actual implementation
         # task; control-only stages are handled by the backend.
@@ -574,7 +604,8 @@ class MissionService:
         versions = await self.repo.list(MissionPlan, mid)
         saved = MissionPlan(**plan.model_dump(), id=new_id('plan'), mission_id=mid,
             version=len(versions) + 1, leader_session_id=leader.id,
-            choices=[leader_choice, worker, reviewer], envelope=envelope, created_at=utc_now())
+            choices=[leader_choice, worker, reviewer], envelope=envelope,
+            planning_policy=mission.planning_policy, created_at=utc_now())
         await self.repo.put(saved)
         for instruction in await self.repo.list(Instruction, mid):
             if instruction.disposition in ('pending', 'replan'):
@@ -753,7 +784,9 @@ class MissionService:
                 review = await self.turn(mission.id, reviewer,
                     f"Revise independentemente a task {planned.title}. Base SHA {base_sha}; head SHA {head_sha}. "
                     f"Critérios: {planned.acceptance}. Diff/evidência:\n{diff.content}\n"
-                    "Se houver qualquer falha corrigível, use changes_requested com finding concreto. "
+                    "Avalie somente estes critérios e o código entregue; não invente documentação, protocolo ou evidência que não faça parte deles. "
+                    "Uma falha esperada porque a task é apenas um lado de uma integração não é changes_requested se os critérios desta task forem atendidos. "
+                    "Se houver qualquer falha corrigível nos critérios desta task, use changes_requested com finding concreto. "
                     "Use human_input_required somente se faltar uma decisão, credencial ou permissão externa. "
                     f"O backend já registrou a main no projeto {project_root} e o base SHA {base_sha}; não solicite ao usuário acesso à main "
                     "nem evidência adicional sobre arquivos fora da sua worktree de revisão.", ReviewOutput)
@@ -775,7 +808,8 @@ class MissionService:
                 return
             if review.verdict == 'human_input_required':
                 raise HumanInputRequired(review.justification)
-            await self.repo.tasks.update_status(task.id, TaskStatus.WAITING)
+            await self.repo.tasks.update_status(task.id, TaskStatus.WAITING,
+                waiting_reason=f'Reviewer requested corrections; round {self.max_review_rounds} exhausted.')
         raise MissionBlocked(f"Limite de revisões atingido para {planned.key}.")
 
     async def capture_diff_at(self, mission: Mission, task_id: str, session_id: str,

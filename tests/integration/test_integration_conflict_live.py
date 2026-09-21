@@ -11,6 +11,7 @@ import pytest
 from core.bridge.context import build_context
 from core.integration.models import QualityGateDefinition, QualityGateProfile
 from core.missions.models import MissionCommand, MissionCreate
+from core.parallel.models import PlanningPolicy
 from core.projects.models import ProjectCreate
 from core.security.secret_store import InMemorySecretStore
 from core.utils.ids import new_id
@@ -45,7 +46,9 @@ async def test_real_codex_assisted_conflict_resolution(tmp_path):
             gates=[QualityGateDefinition(id="pytest", name="pytest", argv=["python", "-m", "pytest", "-q"], kind="test", source="user")], created_at=utc_now(), updated_at=utc_now())
         await ctx.integration_repo.save_profile(profile)
         mission = await service.create(MissionCreate(project_id=project.id, command_id="conflict-create",
-            request="Atlas and Nova must independently edit the same shared_contract.py contract. Atlas implements backend_value returning 2 and Nova implements frontend_label returning new, both changing VERSION to 2. Keep both behaviors after integration, create a real Git conflict, and do not alter main."))
+            request="Atlas and Nova must independently edit the same shared_contract.py contract. Atlas implements backend_value returning 2 and Nova implements frontend_label returning new, both changing VERSION to 2. Keep both behaviors after integration, create a real Git conflict, and do not alter main.",
+            planning_policy=PlanningPolicy(mode="bounded", desired_workstreams=2, max_implementation_tasks=2,
+                allow_additional_workstreams=False, allow_internal_subtasks=True)))
         await service.command(MissionCommand(mission_id=mission.id, command_id="conflict-plan", action="analyze"))
         await service.wait(mission.id)
         planned = await service.repo.snapshot(mission.id)

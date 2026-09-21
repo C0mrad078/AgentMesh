@@ -78,7 +78,7 @@ class CodexCliProvider(CliProviderAdapter):
         # value, which the CLI rejects with its own 400 (also caught live).
         model = real_model_or_none(request.metadata)
         risk = _risk_from_metadata(request.metadata)
-        argv = ["codex", "exec", "--json", "--skip-git-repo-check", "-s", sandbox_mode_for(risk)]
+        argv = ["codex", "exec", "--json", "--ignore-user-config", "--skip-git-repo-check", "-s", sandbox_mode_for(risk)]
         resume_id = request.metadata.get('resume_session_id')
         if isinstance(resume_id, str) and resume_id:
             # Parent exec flags retain the sandbox for this exact resumed session.

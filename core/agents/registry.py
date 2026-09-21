@@ -237,8 +237,10 @@ _COLLABORATION_AGENTS = [
         id=f"agent_{provider}_{role}", name=f"{label} {_COLLAB_NAMES[role]}",
         provider=provider, model="default", role=role,
         capabilities=[AgentCapability(name=c) for c in capabilities],
-        permissions=AgentPermissions(can_read_files=True, can_write_files=role.startswith("worker"),
-                                     can_run_git=role.startswith("worker"), can_run_terminal=True),
+        permissions=AgentPermissions(can_read_files=True,
+                                     can_write_files=role.startswith("worker") or role == "integrator",
+                                     can_run_git=role.startswith("worker") or role == "integrator",
+                                     can_run_terminal=True),
         system_prompt="Provide independent, evidence-based planning or review. Never approve your own work.",
     )
     for provider, label in [("codex_cli", "Codex CLI"), ("claude_code_cli", "Claude Code")]

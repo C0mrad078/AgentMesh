@@ -54,6 +54,7 @@ class Task(BaseModel):
     assigned_agent_id: str | None = None
     assigned_team_id: str | None = None
     session_id: str | None = None
+    waiting_reason: str = ""
 
 
 class TaskCreate(BaseModel):

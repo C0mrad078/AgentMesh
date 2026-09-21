@@ -38,3 +38,27 @@ limitation: the Codex planner generated more than two worker tasks, exhausted
 the configured per-mission/provider capacity, and therefore did not reach a
 Git conflict. The test fails with that diagnosis rather than fabricating a
 successful resolution. The earlier Marco 2.1 parallel smoke remains green.
+
+## Planning bounded e liveness
+
+`PlanningPolicy` é persistida na Mission e no MissionPlan. No modo `bounded`,
+`desired_workstreams` e `max_implementation_tasks` limitam Tasks de
+implementação; passos sequenciais permanecem em `internal_steps`, enquanto
+review, integração e QA são etapas sistêmicas do scheduler. No modo
+autonomous, o líder conserva liberdade dentro do `ExecutionEnvelope`.
+
+A migration `0019_planning_liveness.sql` persiste `tasks.waiting_reason`.
+O scheduler executa workers em ondas determinísticas, libera leases ao
+concluir cada worker e registra a razão quando uma tarefa aguarda correção.
+Uma sessão Codex usa `--ignore-user-config` para impedir que um MCP inválido
+e não relacionado ao projeto interrompa a execução; a autenticação continua
+sendo a do próprio Codex CLI.
+
+O smoke opt-in `tests/integration/test_integration_conflict_live.py` foi
+executado com quatro Agents Codex. A política bounded produziu exatamente dois
+workstreams: Atlas e Nova rodaram em worktrees distintas com sobreposição;
+a integração gerou conflito textual real em `shared_contract.py`; Vega criou a
+sessão e worktree de resolução, perguntou aos dois trabalhadores e persistiu
+as respostas; Sentinel revisou independentemente. Após o gate e aprovação
+humana, a branch de integração avançou e a `main` do fixture permaneceu no
+SHA inicial. A execução passou em 360,69 s.

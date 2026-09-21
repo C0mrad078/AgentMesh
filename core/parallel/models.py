@@ -41,6 +41,21 @@ class ExecutionEnvelope(BaseModel):
     queue_policy: Literal["priority_fifo", "fifo"] = "priority_fifo"
 
 
+class PlanningPolicy(BaseModel):
+    mode: Literal["autonomous", "bounded"] = "autonomous"
+    desired_workstreams: int = Field(default=2, ge=1, le=32)
+    max_implementation_tasks: int = Field(default=12, ge=1, le=100)
+    allow_additional_workstreams: bool = True
+    allow_internal_subtasks: bool = True
+    total_time_budget: int = Field(default=1200, ge=30, le=86400)
+    task_time_budget: int = Field(default=600, ge=10, le=7200)
+    planner_time_budget: int = Field(default=300, ge=10, le=3600)
+    review_time_budget: int = Field(default=600, ge=10, le=7200)
+    integration_time_budget: int = Field(default=900, ge=10, le=7200)
+    maximum_replans: int = Field(default=1, ge=0, le=5)
+    completion_strategy: Literal["all_workstreams", "required_workstreams"] = "all_workstreams"
+
+
 class WorktreeLease(BaseModel):
     id: str
     mission_id: str

@@ -321,3 +321,152 @@ async def test_deployment_release_create_rejects_unmerged_candidate(ctx) -> None
 
     with pytest.raises(ValidationError, match="must originate from a merged delivery candidate"):
         await dispatch("deployment.release.create", {"project_id": pid, "delivery_candidate_id": cand_id}, ctx)
+
+
+@pytest.mark.asyncio
+async def test_deployment_full_run_and_rollback_bridge(ctx) -> None:
+    from core.deployment.models import (
+        DeploymentRollbackExecution,
+        DeploymentRun,
+        ReleaseCandidate,
+        ReleaseSnapshot,
+    )
+
+    project_id, del_cand_id = await _create_merged_delivery_candidate(ctx, mission_id="m-run-test")
+    envs = await dispatch("deployment.environment.list", {"project_id": project_id}, ctx)
+    dev_env = next(e for e in envs if e["name"] == "development")
+    staging_env = next(e for e in envs if e["name"] == "staging")
+
+    rel_res = await dispatch("deployment.release.create", {"project_id": project_id, "delivery_candidate_id": del_cand_id}, ctx)
+    rc_id = rel_res["release_candidate"]["id"]
+
+    await dispatch("deployment.predeploy.run", {"project_id": project_id, "release_candidate_id": rc_id}, ctx)
+    await dispatch("deployment.approval.submit", {
+        "project_id": project_id,
+        "release_candidate_id": rc_id,
+        "environment_id": dev_env["id"],
+        "action": "deploy_development",
+        "decision": "approved",
+        "actor_id": "lead-1",
+        "actor_role": "lead",
+    }, ctx)
+
+    # Mock deploy
+    async def fake_deploy(release_candidate_id, environment_id, initiated_by=None, idempotency_key=None):
+        run = DeploymentRun(
+            project_id=project_id,
+            release_candidate_id=release_candidate_id,
+            environment_id=environment_id,
+            environment_name="development",
+            target_sha=VALID_SHA,
+            idempotency_key=idempotency_key or "test-run-bridge",
+            initiated_by=initiated_by or "lead-1",
+            status="in_flight",
+        )
+        await ctx.deployment_service.repo.save_run(run)
+        return run
+    ctx.deployment_service.deploy = fake_deploy
+
+    # 1. deployment.run.execute
+    run_res = await dispatch("deployment.run.execute", {
+        "project_id": project_id,
+        "release_candidate_id": rc_id,
+        "environment_id": dev_env["id"],
+        "idempotency_key": "exec-bridge-1",
+        "initiated_by": "lead-1",
+    }, ctx)
+    assert run_res["run"]["status"] == "in_flight"
+    run_id = run_res["run"]["id"]
+
+    # 2. deployment.run.get
+    run_get = await dispatch("deployment.run.get", {"project_id": project_id, "deployment_run_id": run_id}, ctx)
+    assert run_get["run"]["id"] == run_id
+
+    # Mark as succeeded and update environment for promotion
+    run_row = await ctx.db.fetch_one("SELECT data FROM deployment_runs WHERE id=?", (run_id,))
+    run_obj = DeploymentRun.model_validate_json(run_row["data"])
+    run_obj = run_obj.model_copy(update={"status": "succeeded"})
+    await ctx.deployment_service.repo.save_run(run_obj)
+
+    env = await ctx.deployment_service._environment(dev_env["id"])
+    updated_env = env.model_copy(update={
+        "current_release_id": rc_id,
+        "current_release_sha": VALID_SHA,
+        "last_healthy_release_id": rc_id,
+        "last_healthy_release_sha": VALID_SHA,
+        "observed_state": "healthy",
+    })
+    await ctx.deployment_service.repo.save_environment(updated_env)
+
+    # 3. deployment.promote.request & execute
+    promo_res = await dispatch("deployment.promote.request", {
+        "project_id": project_id,
+        "release_candidate_id": rc_id,
+        "from_environment_id": dev_env["id"],
+        "to_environment_id": staging_env["id"],
+        "actor_id": "lead-1",
+    }, ctx)
+    promo_id = promo_res["id"]
+
+    await dispatch("deployment.approval.submit", {
+        "project_id": project_id,
+        "release_candidate_id": rc_id,
+        "environment_id": staging_env["id"],
+        "action": "deploy_staging",
+        "decision": "approved",
+        "actor_id": "qa-1",
+        "actor_role": "qa",
+    }, ctx)
+
+    promo_exec = await dispatch("deployment.promote.execute", {
+        "project_id": project_id,
+        "promotion_request_id": promo_id,
+        "actor_id": "lead-1",
+    }, ctx)
+    assert promo_exec["run"]["status"] == "in_flight"
+
+    # 4. deployment.rollback.propose & execute
+    rc_old = ReleaseCandidate(
+        id="rc-old-bridge",
+        project_id=project_id,
+        delivery_candidate_id=del_cand_id,
+        delivery_snapshot_id="ds-old-bridge",
+        version=99,
+        target_sha="9" * 40,
+        status="development_ready",
+        created_by="lead-1",
+    )
+    snap_old = ReleaseSnapshot(
+        id="snap-old-bridge",
+        release_candidate_id=rc_old.id,
+        version=99,
+        target_sha="9" * 40,
+        artifacts_hash="9" * 64,
+    )
+    await ctx.deployment_service.repo.save_release(rc_old, snap_old)
+
+    rollback_prop = await dispatch("deployment.rollback.propose", {
+        "project_id": project_id,
+        "deployment_run_id": run_id,
+        "environment_id": dev_env["id"],
+        "target_release_id": rc_old.id,
+        "reason": "Test regression",
+        "actor_id": "lead-1",
+    }, ctx)
+    assert rollback_prop["status"] in {"proposed", "pending"}
+    plan_id = rollback_prop["id"]
+
+    async def fake_rollback(run_id, *, initiated_by, target_release_id=None, approved=False):
+        return DeploymentRollbackExecution(
+            rollback_plan_id=plan_id,
+            status="succeeded",
+            initiated_by=initiated_by,
+        )
+    ctx.deployment_service.rollback = fake_rollback
+
+    rollback_exec = await dispatch("deployment.rollback.execute", {
+        "project_id": project_id,
+        "rollback_plan_id": plan_id,
+        "actor_id": "lead-1",
+    }, ctx)
+    assert rollback_exec["status"] == "succeeded"

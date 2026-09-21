@@ -1379,9 +1379,22 @@ async def _build_run_detail(run: Any, ctx: BridgeContext) -> dict[str, Any]:
     attempts = [a.model_dump(mode="json") for a in await service.repo.records(DeploymentAttempt, run.id)]
     operations = [o.model_dump(mode="json") for o in await service.repo.records(DeploymentOperation, run.id)]
 
-    log_rows = await ctx.db.fetch_all("SELECT data FROM deployment_logs WHERE deployment_run_id=? ORDER BY timestamp", (run.id,))
-    from core.deployment.models import DeploymentLog
-    logs = [DeploymentLog.model_validate_json(r["data"]).model_dump(mode="json") for r in log_rows]
+    log_rows = await ctx.db.fetch_all(
+        "SELECT id, deployment_run_id, attempt_number, log_level, message_sanitized, source, timestamp FROM deployment_logs WHERE deployment_run_id=? ORDER BY timestamp",
+        (run.id,),
+    )
+    logs = [
+        {
+            "id": r["id"],
+            "deployment_run_id": r["deployment_run_id"],
+            "attempt_number": r["attempt_number"],
+            "log_level": r["log_level"],
+            "message_sanitized": r["message_sanitized"],
+            "source": r["source"],
+            "timestamp": r["timestamp"],
+        }
+        for r in log_rows
+    ]
 
     health_rows = await ctx.db.fetch_all("SELECT data FROM health_check_results WHERE deployment_run_id=?", (run.id,))
     health_results = [HealthCheckResult.model_validate_json(r["data"]).model_dump(mode="json") for r in health_rows]

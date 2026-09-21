@@ -22,7 +22,11 @@ def choose_agent(agents: list[Agent], *, role: Role, connected: set[str],
                 agent.project_id not in (None, project_id) or agent.provider not in connected or
                 not agent.permissions.can_read_files or not caps & ROLE_CAPABILITIES[role]):
             continue
-        if role == 'worker' and (not agent.permissions.can_write_files or not wanted <= caps):
+        # A plan may describe a union of concerns (for example architecture
+        # plus coding plus tests). A worker only needs a meaningful capability
+        # match; requiring the entire union silently removes otherwise valid
+        # parallel Agents from the catalog.
+        if role == 'worker' and (not agent.permissions.can_write_files or not caps & wanted):
             continue
         if role in {'reviewer', 'integrator'} and not agent.permissions.can_run_terminal:
             continue

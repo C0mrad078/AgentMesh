@@ -35,6 +35,20 @@ from core.utils.logging import get_logger, log_event
 logger = get_logger("bridge.server")
 
 _REQUEST_TIMEOUT_SECONDS = 30.0
+# Delivery gates and bounded worker/reviewer cycles can outlive an interactive
+# request. Each subprocess still has its own timeout; cancellation keeps a
+# durable recovery intent instead of blindly replaying remote mutations.
+_DELIVERY_REQUEST_TIMEOUT_SECONDS = 10800.0
+_LONG_DELIVERY_COMMANDS = frozenset({
+    "delivery.preflight.run", "delivery.ci.assign_fix", "delivery.remote.push",
+    "delivery.pr.create", "delivery.pr.update", "delivery.merge.execute",
+    "delivery.rollback.execute",
+})
+
+
+def request_timeout_seconds(command: str) -> float:
+    return (_DELIVERY_REQUEST_TIMEOUT_SECONDS if command in _LONG_DELIVERY_COMMANDS
+            else _REQUEST_TIMEOUT_SECONDS)
 
 
 def make_event_sink(transport: StdioTransport):
@@ -157,6 +171,7 @@ class BridgeServer:
 
     async def _handle_line(self, line: str) -> None:
         request_id = None
+        request_timeout = _REQUEST_TIMEOUT_SECONDS
         try:
             raw = json.loads(line)
             request_id = raw.get("id")
@@ -172,15 +187,16 @@ class BridgeServer:
 
             log_event(logger, 10, "request_received", context={"command": command, "id": request_id})
 
+            request_timeout = request_timeout_seconds(command)
             result = await asyncio.wait_for(
-                dispatch(command, params, self._context), timeout=_REQUEST_TIMEOUT_SECONDS
+                dispatch(command, params, self._context), timeout=request_timeout
             )
             response = ResponseMessage(id=request_id, ok=True, result=result)
 
         except TimeoutError:
             response = ResponseMessage(
                 id=request_id or "unknown", ok=False,
-                error=to_error_payload_from_timeout(),
+                error=to_error_payload_from_timeout(request_timeout),
             )
         except Exception as exc:  # noqa: BLE001 - top-level per-request containment
             response = ResponseMessage(id=request_id or "unknown", ok=False, error=to_error_payload(exc))
@@ -188,12 +204,12 @@ class BridgeServer:
         await self._transport.write_line(response.model_dump_json())
 
 
-def to_error_payload_from_timeout():
+def to_error_payload_from_timeout(timeout_seconds: float | None = None):
     from core.bridge.protocol import ErrorPayload
     from core.utils.errors import ErrorCode
 
     return ErrorPayload(
         code=ErrorCode.TIMEOUT.value,
-        message=f"Request exceeded the {_REQUEST_TIMEOUT_SECONDS}s server-side timeout.",
+        message=f"Request exceeded the {timeout_seconds if timeout_seconds is not None else _REQUEST_TIMEOUT_SECONDS}s server-side timeout.",
         details={},
     )

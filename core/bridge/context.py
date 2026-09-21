@@ -75,6 +75,7 @@ from core.database.repositories.tool_calls_repo import ToolCallsRepository
 from core.database.repositories.usage_metrics_repo import UsageMetricsRepository
 from core.database.repositories.user_feedback_repo import UserFeedbackRepository
 from core.database.repositories.worktrees_repo import WorktreesRepository
+from core.delivery.service import DeliveryService
 from core.learning.context_optimizer import ContextOptimizer
 from core.learning.learning_engine import LearningEngine
 from core.learning.model_performance import ModelPerformanceTracker
@@ -190,6 +191,7 @@ class BridgeContext:
     context_optimizer: ContextOptimizer
 
     mission_service: MissionService | None = None
+    delivery_service: DeliveryService | None = None
 
     async def close(self) -> None:
         if self.mission_service is not None:
@@ -450,5 +452,6 @@ async def build_context(
     )
 
     context.mission_service = MissionService(context)
+    context.delivery_service = DeliveryService(context)
     await context.mission_service.recover()
     return context

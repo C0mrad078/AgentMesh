@@ -13,6 +13,23 @@ from enum import Enum
 
 
 class BridgeCommand(str, Enum):
+    DELIVERY_CANDIDATE_CREATE = "delivery.candidate.create"
+    DELIVERY_CANDIDATE_GET = "delivery.candidate.get"
+    DELIVERY_CANDIDATE_LIST = "delivery.candidate.list"
+    DELIVERY_PREFLIGHT_RUN = "delivery.preflight.run"
+    DELIVERY_BINDING_GET = "delivery.binding.get"
+    DELIVERY_BINDING_SAVE = "delivery.binding.save"
+    DELIVERY_APPROVAL_SUBMIT = "delivery.approval.submit"
+    DELIVERY_REMOTE_PUSH = "delivery.remote.push"
+    DELIVERY_PR_CREATE = "delivery.pr.create"
+    DELIVERY_PR_UPDATE = "delivery.pr.update"
+    DELIVERY_CI_STATUS = "delivery.ci.status"
+    DELIVERY_CI_ASSIGN_FIX = "delivery.ci.assign_fix"
+    DELIVERY_MERGE_EXECUTE = "delivery.merge.execute"
+    DELIVERY_ROLLBACK_PROPOSE = "delivery.rollback.propose"
+    DELIVERY_ROLLBACK_EXECUTE = "delivery.rollback.execute"
+    DELIVERY_TELEMETRY_LIST = "delivery.telemetry.list"
+
     MISSION_CREATE = "mission.create"
     MISSION_LIST = "mission.list"
     MISSION_GET = "mission.get"

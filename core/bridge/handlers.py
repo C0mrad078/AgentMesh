@@ -65,6 +65,9 @@ async def dispatch(command_str: str, params: dict[str, Any], ctx: BridgeContext)
     fn = _HANDLERS.get(command)
     if fn is None:
         raise UnknownCommandError(f"Command '{command_str}' has no registered handler.")
+    if command_str.startswith("delivery."):
+        from core.delivery.bridge import validate_request
+        params = validate_request(command_str, params)
     return await fn(params, ctx)
 
 
@@ -1069,3 +1072,118 @@ async def _mission_get(params: dict[str, Any], ctx: BridgeContext) -> dict[str, 
 async def _mission_command(params: dict[str, Any], ctx: BridgeContext) -> dict[str, Any]:
     assert ctx.mission_service is not None
     return (await ctx.mission_service.command(MissionCommand.model_validate(params))).model_dump(mode="json")
+
+
+# Delivery mutations are serialized within this sidecar. Database uniqueness and
+# a durable pre-effect intent also guard duplicate calls/restarts across processes.
+def _delivery(ctx: BridgeContext):
+    if ctx.delivery_service is None:
+        raise ValidationError('Delivery service unavailable')
+    return ctx.delivery_service
+
+
+@handler(BridgeCommand.DELIVERY_CANDIDATE_CREATE)
+async def _delivery_create(params, ctx):
+    service = _delivery(ctx)
+    async with service.lock:
+        return await service.create(_require_str(params, 'mission_id'), _require_str(params, 'project_id'))
+
+
+@handler(BridgeCommand.DELIVERY_CANDIDATE_GET)
+async def _delivery_get(params, ctx):
+    return await _delivery(ctx).detail(_require_str(params, 'candidate_id'))
+
+
+@handler(BridgeCommand.DELIVERY_CANDIDATE_LIST)
+async def _delivery_list(params, ctx):
+    return await _delivery(ctx).list(params.get('project_id'), params.get('mission_id'))
+
+
+@handler(BridgeCommand.DELIVERY_BINDING_SAVE)
+async def _delivery_binding_save(params, ctx):
+    from core.delivery.models import RemoteRepositoryBindingInput
+    service = _delivery(ctx)
+    async with service.lock:
+        return (await service.binding_save(RemoteRepositoryBindingInput.model_validate(params))).model_dump(mode='json')
+
+
+@handler(BridgeCommand.DELIVERY_BINDING_GET)
+async def _delivery_binding_get(params, ctx):
+    return (await _delivery(ctx).repo.binding(project_id=_require_str(params, 'project_id'))).model_dump(mode='json')
+
+
+@handler(BridgeCommand.DELIVERY_PREFLIGHT_RUN)
+async def _delivery_preflight(params, ctx):
+    service = _delivery(ctx)
+    async with service.lock:
+        return (await service.run_preflight(_require_str(params, 'candidate_id'))).model_dump(mode='json')
+
+
+@handler(BridgeCommand.DELIVERY_APPROVAL_SUBMIT)
+async def _delivery_approval(params, ctx):
+    service = _delivery(ctx)
+    async with service.lock:
+        return (await service.approve(_require_str(params, 'candidate_id'),
+            _require_str(params, 'action'), _require_str(params, 'decision'),
+            _require_str(params, 'actor'), params.get('reason', ''))).model_dump(mode='json')
+
+
+async def _delivery_operation(params, ctx, action):
+    service = _delivery(ctx)
+    async with service.lock:
+        result = await service.execute(_require_str(params, 'candidate_id'), action,
+            _require_str(params, 'idempotency_key'), params.get('merge_method'))
+        return result.result if action in ('pr_create', 'pr_update') else result.model_dump(mode='json')
+
+
+@handler(BridgeCommand.DELIVERY_REMOTE_PUSH)
+async def _delivery_push(params, ctx):
+    return await _delivery_operation(params, ctx, 'push')
+
+
+@handler(BridgeCommand.DELIVERY_PR_CREATE)
+async def _delivery_pr_create(params, ctx):
+    return await _delivery_operation(params, ctx, 'pr_create')
+
+
+@handler(BridgeCommand.DELIVERY_PR_UPDATE)
+async def _delivery_pr_update(params, ctx):
+    return await _delivery_operation(params, ctx, 'pr_update')
+
+
+@handler(BridgeCommand.DELIVERY_MERGE_EXECUTE)
+async def _delivery_merge(params, ctx):
+    return await _delivery_operation(params, ctx, 'merge')
+
+
+@handler(BridgeCommand.DELIVERY_ROLLBACK_EXECUTE)
+async def _delivery_rollback(params, ctx):
+    return await _delivery_operation(params, ctx, 'rollback')
+
+
+@handler(BridgeCommand.DELIVERY_CI_STATUS)
+async def _delivery_ci_status(params, ctx):
+    service = _delivery(ctx)
+    async with service.lock:
+        return [r.model_dump(mode='json') for r in await service.ci_status(_require_str(params, 'candidate_id'))]
+
+
+@handler(BridgeCommand.DELIVERY_CI_ASSIGN_FIX)
+async def _delivery_ci_fix(params, ctx):
+    service = _delivery(ctx)
+    async with service.lock:
+        return (await service.assign_fix(_require_str(params, 'candidate_id'),
+            _require_str(params, 'finding_id'), params.get('agent_id'))).model_dump(mode='json')
+
+
+@handler(BridgeCommand.DELIVERY_ROLLBACK_PROPOSE)
+async def _delivery_rollback_propose(params, ctx):
+    service = _delivery(ctx)
+    async with service.lock:
+        return (await service.propose_rollback(_require_str(params, 'candidate_id'),
+            _require_str(params, 'reason'))).model_dump(mode='json')
+
+
+@handler(BridgeCommand.DELIVERY_TELEMETRY_LIST)
+async def _delivery_telemetry(params, ctx):
+    return [r.model_dump(mode='json') for r in await _delivery(ctx).telemetry(params.get('candidate_id'), params.get('mission_id'))]

@@ -20,6 +20,11 @@ Thumbs.db
 .idea/
 *.swp
 
+# Secrets & Environment
+.env
+.env.*
+*.env
+
 # Node (desktop/ has its own, but ignore stray installs at the root too)
 node_modules/
 

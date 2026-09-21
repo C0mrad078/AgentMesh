@@ -1,0 +1,1 @@
+"""Persisted, assisted integration domain."""

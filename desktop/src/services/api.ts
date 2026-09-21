@@ -92,6 +92,10 @@ export const agentsApi = {
   ) => invokeBridge<Agent>("agent.update", { agent_id, ...input }),
 };
 
+export const integrationApi = {
+  conflicts: (mission_id: string) => invokeBridge<unknown[]>("integration.conflict.list", { mission_id }),
+};
+
 export const teamsApi = {
   create: (input: { name: string; project_id?: string | null; description?: string }) =>
     invokeBridge<Team>("team.create", input),
@@ -185,7 +189,7 @@ export const settingsApi = {
 export interface RuntimeBinding {
   id: string; provider_id: string; account_id: string | null; label: string;
   configured_capacity: number; observed_capacity: number; reserved_slots: number;
-  health: string; backoff_until: string | null;
+  health: string; enabled: boolean; last_diagnostic?: string; backoff_until: string | null; last_reconciled_at?: string | null;
 }
 
 export const runtimeBindingsApi = {
@@ -194,6 +198,8 @@ export const runtimeBindingsApi = {
     invokeBridge<RuntimeBinding>("runtime_binding.create", input),
   setCapacity: (binding_id: string, configured_capacity: number, observed_capacity?: number) =>
     invokeBridge<RuntimeBinding>("runtime_binding.set_capacity", { binding_id, configured_capacity, observed_capacity }),
+  setEnabled: (binding_id: string, enabled: boolean) => invokeBridge<RuntimeBinding>("runtime_binding.set_enabled", { binding_id, enabled }),
+  reconcile: (binding_id: string) => invokeBridge<RuntimeBinding>("runtime_binding.reconcile", { binding_id }),
 };
 
 export const healthApi = {

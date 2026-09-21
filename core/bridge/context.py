@@ -40,6 +40,7 @@ from core.database.repositories.context_metrics_repo import ContextMetricsReposi
 from core.database.repositories.execution_events_repo import ExecutionEventsRepository
 from core.database.repositories.execution_steps_repo import ExecutionStepsRepository
 from core.database.repositories.executions_repo import ExecutionsRepository
+from core.database.repositories.integration_repo import IntegrationRepository
 from core.database.repositories.learned_rules_repo import LearnedRulesRepository
 from core.database.repositories.learning_candidates_repo import LearningCandidatesRepository
 from core.database.repositories.learning_events_repo import LearningEventsRepository
@@ -168,6 +169,7 @@ class BridgeContext:
     learning_policy_repo: LearningPolicyRepository
     context_metrics_repo: ContextMetricsRepository
     parallel_repo: ParallelRepository
+    integration_repo: IntegrationRepository
     # -- Refactor V2, Phase 1: new persisted domain model -----------------
     # (docs/refactor-v2-plan.md §4) -- repositories only; nothing in the
     # engine/bridge commands consumes these yet (Phase 2/3/6 wiring).
@@ -429,6 +431,7 @@ async def build_context(
         learning_policy_repo=learning_policy_repo,
         context_metrics_repo=context_metrics_repo,
         parallel_repo=ParallelRepository(db),
+        integration_repo=IntegrationRepository(db),
         teams_repo=teams_repo,
         providers_repo=providers_repo,
         provider_accounts_repo=provider_accounts_repo,

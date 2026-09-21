@@ -143,14 +143,20 @@ class MissionsRepository:
                 messages=await self.list(AgentMessage, mission_id),
                 artifacts=await self.list(Artifact, mission_id), reviews=await self.list(Review, mission_id),
                 instructions=await self.list(Instruction, mission_id), events=events)
+            from core.database.repositories.integration_repo import IntegrationRepository
             from core.database.repositories.parallel_repo import ParallelRepository
             parallel = ParallelRepository(self.db)
+            integration = IntegrationRepository(self.db)
+            conflicts = await integration.list_conflicts(mission_id)
+            attempts = [attempt for conflict in conflicts for attempt in await integration.attempts(conflict.id)]
             snapshot = snapshot.model_copy(update={
                 "worktrees": await parallel.list_worktrees(mission_id),
                 "forecasts": await parallel.forecasts(mission_id),
                 "integrations": await parallel.integrations(mission_id),
                 "quality_gates": await parallel.gates(mission_id),
                 "approvals": await parallel.approvals(mission_id),
+                "conflicts": conflicts,
+                "resolution_attempts": attempts,
             })
             latest = await self.events(mission_id, events[-1].sequence if events else 0)
             if not latest:

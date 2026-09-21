@@ -16,6 +16,7 @@ from typing import Any
 from core.agents.models import AgentCreate, AgentUpdate
 from core.bridge.context import BridgeContext
 from core.database.backup import create_backup, list_backups, restore_backup
+from core.integration.models import QualityGateProfile, ResolutionDecision
 from core.learning.prompt_optimizer import PromptProposal
 from core.missions.models import MissionCommand, MissionCreate
 from core.orchestrator.budget import BudgetLimits
@@ -180,6 +181,59 @@ async def _runtime_binding_set_capacity(params: dict[str, Any], ctx: BridgeConte
         raise ValidationError("observed_capacity deve estar entre 0 e configured_capacity.")
     value = await ctx.runtime_bindings_repo.set_capacity(binding_id, configured, observed)
     return value.model_dump(mode="json")
+
+
+@handler(BridgeCommand.RUNTIME_BINDING_SET_ENABLED)
+async def _runtime_binding_set_enabled(params: dict[str, Any], ctx: BridgeContext) -> dict[str, Any]:
+    binding_id = _require_str(params, "binding_id")
+    enabled = params.get("enabled")
+    if not isinstance(enabled, bool):
+        raise ValidationError("enabled deve ser booleano.")
+    return (await ctx.runtime_bindings_repo.set_enabled(binding_id, enabled)).model_dump(mode="json")
+
+
+@handler(BridgeCommand.RUNTIME_BINDING_RECONCILE)
+async def _runtime_binding_reconcile(params: dict[str, Any], ctx: BridgeContext) -> dict[str, Any]:
+    binding_id = _require_str(params, "binding_id")
+    await ctx.runtime_bindings_repo.reconcile_slots()
+    value = await ctx.runtime_bindings_repo.get_or_raise(binding_id)
+    return value.model_dump(mode="json")
+
+
+@handler(BridgeCommand.RUNTIME_BINDING_DELETE)
+async def _runtime_binding_delete(params: dict[str, Any], ctx: BridgeContext) -> dict[str, Any]:
+    await ctx.runtime_bindings_repo.delete(_require_str(params, "binding_id"))
+    return {"deleted": True}
+
+
+@handler(BridgeCommand.QUALITY_GATE_PROFILE_LIST)
+async def _quality_gate_profile_list(params: dict[str, Any], ctx: BridgeContext) -> list[Any]:
+    return [p.model_dump(mode="json") for p in await ctx.integration_repo.list_profiles(_require_str(params, "project_id"))]
+
+
+@handler(BridgeCommand.QUALITY_GATE_PROFILE_SAVE)
+async def _quality_gate_profile_save(params: dict[str, Any], ctx: BridgeContext) -> dict[str, Any]:
+    profile = QualityGateProfile.model_validate(params)
+    return (await ctx.integration_repo.save_profile(profile)).model_dump(mode="json")
+
+
+@handler(BridgeCommand.QUALITY_GATE_PROFILE_DELETE)
+async def _quality_gate_profile_delete(params: dict[str, Any], ctx: BridgeContext) -> dict[str, Any]:
+    await ctx.integration_repo.delete_profile(_require_str(params, "profile_id"))
+    return {"deleted": True}
+
+
+@handler(BridgeCommand.INTEGRATION_CONFLICT_LIST)
+async def _integration_conflict_list(params: dict[str, Any], ctx: BridgeContext) -> list[Any]:
+    return [c.model_dump(mode="json") for c in await ctx.integration_repo.list_conflicts(_require_str(params, "mission_id"))]
+
+
+@handler(BridgeCommand.INTEGRATION_CONFLICT_DECIDE)
+async def _integration_conflict_decide(params: dict[str, Any], ctx: BridgeContext) -> dict[str, Any]:
+    decision = ResolutionDecision.model_validate(params)
+    await ctx.integration_repo.add_decision(decision)
+    await ctx.integration_repo.update_conflict(decision.conflict_id, status="resolved" if decision.decision == "approved" else "rejected")
+    return decision.model_dump(mode="json")
 
 
 # --- teams --------------------------------------------------------------------

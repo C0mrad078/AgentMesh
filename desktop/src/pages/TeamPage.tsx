@@ -9,6 +9,8 @@ import { useAgentsStore } from "@/stores/agentsStore";
 import { useTeamsStore } from "@/stores/teamsStore";
 import { useProjectsStore } from "@/stores/projectsStore";
 import type { Agent, AgentStatus } from "@/types";
+import type { RuntimeBinding } from "@/services/api";
+import { invokeBridge } from "@/services/bridge";
 
 const STATUS_LABEL: Record<AgentStatus, string> = {
   idle: "Disponível",
@@ -39,11 +41,13 @@ export function TeamPage() {
   const [editingAgent, setEditingAgent] = useState<Agent | null>(null);
   const [newTeamName, setNewTeamName] = useState("");
   const [teamPickerByAgent, setTeamPickerByAgent] = useState<Record<string, string>>({});
+  const [runtimeBindings, setRuntimeBindings] = useState<RuntimeBinding[]>([]);
 
   useEffect(() => {
     if (!agentsLoaded) void loadAgents();
     if (!teamsLoaded) void loadTeams();
     if (!projectsLoaded) void loadProjects();
+    void invokeBridge<RuntimeBinding[]>("runtime_binding.list").then(setRuntimeBindings).catch(() => setRuntimeBindings([]));
   }, [agentsLoaded, teamsLoaded, projectsLoaded, loadAgents, loadTeams, loadProjects]);
 
   function openCreate() {
@@ -188,7 +192,7 @@ export function TeamPage() {
         </div>
       )}
 
-      <AgentFormDialog open={formOpen} onOpenChange={setFormOpen} agent={editingAgent} projects={projects} />
+      <AgentFormDialog open={formOpen} onOpenChange={setFormOpen} agent={editingAgent} projects={projects} runtimeBindings={runtimeBindings} />
     </div>
   );
 }

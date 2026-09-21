@@ -140,12 +140,13 @@ export function AgentWorkspacePage() {
               {snapshot.plans.at(-1)?.tasks.map(t => <p key={t.key}>{t.title}: {t.acceptance.join('; ')}</p>)}
             </details> : null}
             {mission?.result && <article className="mission-result"><h2>Resultado consolidado</h2><pre>{mission.result}</pre></article>}
-            {snapshot && (snapshot.worktrees?.length || snapshot.forecasts?.length || snapshot.integrations?.length || snapshot.quality_gates?.length) ? <details className="workspace-plan" open>
+            {snapshot && (snapshot.worktrees?.length || snapshot.forecasts?.length || snapshot.integrations?.length || snapshot.quality_gates?.length || snapshot.conflicts?.length) ? <details className="workspace-plan" open>
               <summary>Execução paralela e integração</summary>
               {snapshot.worktrees?.map(w => <p key={w.id}><strong>{w.branch_name}</strong> · {w.status} · base {w.base_sha.slice(0, 8)}{w.head_sha ? ` → ${w.head_sha.slice(0, 8)}` : ''}</p>)}
               {snapshot.forecasts?.map(f => <p key={f.id}>Conflito {f.level}: {f.reason}{f.paths.length ? ` (${f.paths.join(', ')})` : ''}</p>)}
               {snapshot.integrations?.map(i => <p key={i.id}>Integração {i.result}: {i.source_branch} → {i.integration_branch}{i.commit_sha ? ` (${i.commit_sha.slice(0, 8)})` : ''}</p>)}
               {snapshot.quality_gates?.map(g => <p key={g.id}>Quality gate {g.name}: {g.passed ? 'aprovado' : `falhou (exit ${g.exit_code})`}</p>)}
+              {snapshot.conflicts?.map(c => <p key={c.id} className="text-amber-600">Conflito {c.classification}: {c.status} · {c.files?.map(f => f.path).join(', ') || 'aguarda análise assistida'}</p>)}
             </details> : null}
           </main>
           <aside className="workspace-details" aria-label="Detalhes e conversa">

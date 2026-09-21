@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from datetime import timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, TypeVar
@@ -15,6 +16,7 @@ from typing import TYPE_CHECKING, TypeVar
 from pydantic import BaseModel
 
 from core.database.repositories.missions_repo import MissionsRepository
+from core.integration.models import ConflictFile, IntegrationConflict, classify_conflict
 from core.missions.evidence import describe_changes, snapshot_files
 from core.missions.models import (
     AgentMessage,
@@ -712,6 +714,7 @@ class MissionService:
                     base_sha=base_sha, result='integrated' if ok else 'conflict',
                     commit_sha=commit_sha or None, message=error, created_at=utc_now()))
                 if not ok:
+                    await self._record_integration_conflict(mission, integration_root, wt, base_sha, error)
                     await self.status(mid, 'blocked', 'Conflito de integração requer agente integrador/humano: ' + error)
                     return
             gate = await self.run_quality_gate(mission, integration_root, None, 'post-integration tests')
@@ -726,6 +729,29 @@ class MissionService:
         finally:
             # Keep the integration worktree for inspection; cleanup is explicit and safe.
             pass
+
+    async def _record_integration_conflict(self, mission: Mission, integration_root: Path,
+                                           source: object, base_sha: str, message: str) -> None:
+        """Persist conflict metadata after the safe merge operation is aborted."""
+        branch = getattr(source, 'branch_name', '')
+        head = getattr(source, 'head_sha', None) or base_sha
+        status = await self.worktrees.git(integration_root, ['status', '--porcelain=v1'])
+        paths = [line[3:].strip().strip('"') for line in status.stdout.splitlines() if len(line) > 3]
+        for line in message.splitlines():
+            match = re.search(r'CONFLICT .* in (.+)$', line)
+            if match:
+                paths.append(match.group(1).strip())
+        now = utc_now()
+        conflict_id = new_id('conflict')
+        files = [ConflictFile(id=new_id('conflict_file'), conflict_id=conflict_id, path=path,
+                              classification=classify_conflict(path), created_at=now)
+                 for path in sorted(set(paths))]
+        value = IntegrationConflict(id=conflict_id, mission_id=mission.id, status='detected',
+            classification=files[0].classification if files else 'unknown', base_sha=base_sha,
+            ours_sha=base_sha, theirs_sha=head, integration_head=base_sha,
+            data={'message': self.clean(message), 'source_branch': branch}, files=files,
+            created_at=now, updated_at=now)
+        await self.ctx.integration_repo.add_conflict(value)
 
     async def run_quality_gate(self, mission: Mission, root: Path, task_id: str | None,
                                name: str) -> QualityGateRun:

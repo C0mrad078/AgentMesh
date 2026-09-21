@@ -16,7 +16,10 @@ def _row(row: aiosqlite.Row) -> RuntimeBinding:
         label=row["label"], configured_capacity=row["configured_capacity"],
         observed_capacity=row["observed_capacity"], reserved_slots=row["reserved_slots"],
         health=row["health"], backoff_until=row["backoff_until"],
-        metadata=loads(row["metadata"], {}), created_at=row["created_at"], updated_at=row["updated_at"],
+        metadata=loads(row["metadata"], {}), enabled=bool(row["enabled"]) if "enabled" in row.keys() else True,
+        last_diagnostic=row["last_diagnostic"] if "last_diagnostic" in row.keys() else "",
+        last_reconciled_at=row["last_reconciled_at"] if "last_reconciled_at" in row.keys() else None,
+        created_at=row["created_at"], updated_at=row["updated_at"],
     )
 
 
@@ -59,6 +62,26 @@ class RuntimeBindingsRepository:
             (configured, observed if observed is not None else min(configured, value.observed_capacity), now, binding_id),
         )
         return await self.get_or_raise(binding_id)
+
+    async def set_enabled(self, binding_id: str, enabled: bool) -> RuntimeBinding:
+        await self.get_or_raise(binding_id)
+        await self._db.execute("UPDATE runtime_bindings SET enabled=?, updated_at=? WHERE id=?", (int(enabled), utc_now().isoformat(), binding_id))
+        return await self.get_or_raise(binding_id)
+
+    async def set_diagnostic(self, binding_id: str, diagnostic: str, *, health: str | None = None) -> RuntimeBinding:
+        await self.get_or_raise(binding_id)
+        if len(diagnostic) > 2000:
+            diagnostic = diagnostic[:2000]
+        await self._db.execute("UPDATE runtime_bindings SET last_diagnostic=?, health=COALESCE(?,health), last_reconciled_at=?, updated_at=? WHERE id=?", (diagnostic, health, utc_now().isoformat(), utc_now().isoformat(), binding_id))
+        return await self.get_or_raise(binding_id)
+
+    async def delete(self, binding_id: str) -> None:
+        value = await self.get_or_raise(binding_id)
+        active = await self._db.fetch_one("SELECT 1 FROM sessions WHERE runtime_binding_id=? AND status IN ('starting','working','waiting') LIMIT 1", (binding_id,))
+        agents = await self._db.fetch_one("SELECT 1 FROM agents WHERE runtime_binding_id=? LIMIT 1", (binding_id,))
+        if active or agents or value.reserved_slots:
+            raise ValueError("Runtime binding has active sessions, agents, or reserved slots")
+        await self._db.execute("DELETE FROM runtime_bindings WHERE id=?", (binding_id,))
 
     async def ensure_defaults(self) -> None:
         rows = await self._db.fetch_all("SELECT id,name,display_name FROM providers WHERE name IN ('openai','claude')")

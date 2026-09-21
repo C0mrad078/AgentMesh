@@ -212,6 +212,8 @@ class MissionSnapshot(Contract):
     integrations: list[Any] = Field(default_factory=list)
     quality_gates: list[Any] = Field(default_factory=list)
     approvals: list[Any] = Field(default_factory=list)
+    conflicts: list[Any] = Field(default_factory=list)
+    resolution_attempts: list[Any] = Field(default_factory=list)
 
 
 class MissionCreate(Contract):

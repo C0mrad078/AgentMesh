@@ -16,6 +16,9 @@ class RuntimeBinding(BaseModel):
     reserved_slots: int = Field(default=0, ge=0)
     health: str = "unknown"
     backoff_until: datetime | None = None
+    enabled: bool = True
+    last_diagnostic: str = ""
+    last_reconciled_at: datetime | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
     updated_at: datetime

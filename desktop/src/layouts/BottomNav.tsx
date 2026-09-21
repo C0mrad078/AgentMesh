@@ -1,5 +1,5 @@
 import {
-  Building2, FolderKanban, Users, MessagesSquare, History, Brain, Plug, GraduationCap, Settings,
+  Building2, FolderKanban, Users, MessagesSquare, History, Brain, Plug, GraduationCap, Settings, Cpu,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useUiStore, type AppPage } from "@/stores/uiStore";
@@ -13,6 +13,7 @@ const NAV_ITEMS: { page: AppPage; label: string; icon: typeof Building2 }[] = [
   { page: "executions", label: "Execuções", icon: History },
   { page: "memory", label: "Memória", icon: Brain },
   { page: "providers", label: "Providers", icon: Plug },
+  { page: "runtime-bindings", label: "Runtimes", icon: Cpu },
   { page: "learning", label: "Aprendizado", icon: GraduationCap },
   { page: "settings", label: "Config.", icon: Settings },
 ];

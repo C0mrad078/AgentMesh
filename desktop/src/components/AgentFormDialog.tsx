@@ -9,6 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { VISUAL_PRESETS } from "@/game/office-domain/visualProfile";
 import { useAgentsStore } from "@/stores/agentsStore";
 import type { Agent, ExecutionBackendType, Project } from "@/types";
+import type { RuntimeBinding } from "@/services/api";
 
 const BACKEND_OPTIONS: { value: ExecutionBackendType | ""; label: string }[] = [
   { value: "", label: "Sem preferência" },
@@ -23,6 +24,7 @@ interface AgentFormDialogProps {
   /** `null`/undefined = create mode; a real `Agent` = edit mode. */
   agent?: Agent | null;
   projects: Project[];
+  runtimeBindings?: RuntimeBinding[];
 }
 
 /**
@@ -33,7 +35,7 @@ interface AgentFormDialogProps {
  * action (`TeamPage`'s own team-membership controls), matching the
  * brief's own "Assign Project" / "Assign Team" as two distinct actions.
  */
-export function AgentFormDialog({ open, onOpenChange, agent, projects }: AgentFormDialogProps) {
+export function AgentFormDialog({ open, onOpenChange, agent, projects, runtimeBindings = [] }: AgentFormDialogProps) {
   const createAgent = useAgentsStore((s) => s.createAgent);
   const updateAgent = useAgentsStore((s) => s.updateAgent);
   const isEditing = !!agent;
@@ -159,8 +161,11 @@ export function AgentFormDialog({ open, onOpenChange, agent, projects }: AgentFo
                 <Input id="agent-provider" value={provider} onChange={(e) => setProvider(e.target.value)} placeholder="mock" />
               </div>
               <div className="flex flex-col gap-1.5">
-                <Label htmlFor="agent-binding">RuntimeBinding (opcional)</Label>
-                <Input id="agent-binding" value={runtimeBindingId} onChange={(e) => setRuntimeBindingId(e.target.value)} placeholder="runtime_openai_cli" />
+                  <Label htmlFor="agent-binding">RuntimeBinding</Label>
+                <select id="agent-binding" className="h-9 rounded-md border border-input bg-transparent px-2 text-sm" value={runtimeBindingId} onChange={(e) => setRuntimeBindingId(e.target.value)}>
+                  <option value="">Automático</option>
+                  {runtimeBindings.map((binding) => <option key={binding.id} value={binding.id} disabled={!binding.enabled}>{binding.label} · {binding.provider_id} · {binding.reserved_slots}/{binding.configured_capacity}</option>)}
+                </select>
               </div>
               <div className="flex flex-col gap-1.5">
                 <Label htmlFor="agent-max-sessions">Sessões simultâneas</Label>

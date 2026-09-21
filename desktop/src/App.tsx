@@ -9,6 +9,7 @@ import { ExecutionsPage } from "@/pages/ExecutionsPage";
 import { MemoryPage } from "@/pages/MemoryPage";
 import { ProvidersPage } from "@/pages/ProvidersPage";
 import { SettingsPage } from "@/pages/SettingsPage";
+import { RuntimeBindingsPage } from "@/pages/RuntimeBindingsPage";
 import { LearningPage } from "@/pages/LearningPage";
 import { useUiStore } from "@/stores/uiStore";
 import { useBridgeSubscription } from "@/hooks/useBridgeSubscription";
@@ -31,6 +32,7 @@ const PAGES = {
   executions: ExecutionsPage,
   memory: MemoryPage,
   providers: ProvidersPage,
+  "runtime-bindings": RuntimeBindingsPage,
   settings: SettingsPage,
   learning: LearningPage,
 };
@@ -44,6 +46,7 @@ const PAGE_LABELS: Record<keyof typeof PAGES, string> = {
   executions: "Execuções",
   memory: "Memória",
   providers: "Providers",
+  "runtime-bindings": "Runtimes",
   settings: "Configurações",
   learning: "Aprendizado",
 };

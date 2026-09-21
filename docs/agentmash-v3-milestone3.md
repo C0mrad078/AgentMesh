@@ -19,9 +19,16 @@ bridge and mission snapshots. A failed integration is persisted as a
 classified conflict and shown in Agent Workspace; the integration branch and
 the user's main branch remain separate.
 
-The current assisted flow deliberately stops after recording the conflict so
-that a future integrator session can be attached without silently choosing
-ours or theirs. Binary, lockfile, migration/schema, generated and API
+The assisted flow now creates a real Vega session and resolution worktree,
+captures Git stages, persists structured questions and worker answers, writes
+an audited proposal commit, runs an independent Sentinel review and quality
+profile, and waits for an explicit human decision before fast-forwarding the
+integration branch. Binary, lockfile, migration/schema, generated and API
 contract conflicts are classified conservatively and can be escalated to a
-human. Marco 4 should complete the interactive integrator proposal/review
-loop and add a real conflicting Codex smoke run.
+human.
+
+The opt-in conflict smoke is intentionally still reporting a real external
+limitation: the Codex planner generated more than two worker tasks, exhausted
+the configured per-mission/provider capacity, and therefore did not reach a
+Git conflict. The test fails with that diagnosis rather than fabricating a
+successful resolution. The earlier Marco 2.1 parallel smoke remains green.

@@ -38,9 +38,9 @@ async def test_dispatch_uses_branch_ref_and_passes_release_sha() -> None:
     adapter = GitHubActionsAdapter("ghp_test", client=client)
     binding = DeploymentBinding(project_id="p", environment_id="e", remote_url="https://github.com/acme/app", repo_name="acme/app", workflow_file="deploy.yml", target_branch="main", environment_name="staging")
     sha = "a" * 40
-    await adapter.dispatch(binding, sha, inputs={"environment": "staging"})
+    await adapter.dispatch(binding, sha, inputs={"environment": "staging", "ref": "release-branch"})
     await client.aclose()
-    assert json.loads(seen["json"]) == {"ref": "main", "inputs": {"release_sha": sha, "environment": "staging"}}
+    assert json.loads(seen["json"]) == {"ref": "release-branch", "inputs": {"release_sha": sha, "environment": "staging"}}
 
 
 async def test_dispatch_rejects_invalid_sha_before_http() -> None:

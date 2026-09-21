@@ -76,6 +76,7 @@ class GitHubActionsAdapter:
             raise ValidationError("Deployment SHA must be a verified commit")
         dispatch_inputs = {"release_sha": sha, **(inputs or {})}
         ref = dispatch_inputs.get("ref") or binding.target_branch or "main"
+        dispatch_inputs.pop("ref", None)
         status, body = await self._request("POST", f"/repos/{self._repo(binding)}/actions/workflows/{binding.workflow_file}/dispatches", json={"ref": ref, "inputs": dispatch_inputs})
         if status != 204:
             raise ProviderError("GitHub workflow dispatch was not accepted")

@@ -138,3 +138,45 @@ async def test_promote_forwards_dispatch_inputs() -> None:
     service.deploy = deploy
     await service.promote("release", "source", "target", initiated_by="actor", idempotency_key="key", inputs={"controlled_failure": "true"})
     assert captured["inputs"] == {"controlled_failure": "true"}
+
+
+@pytest.mark.asyncio
+async def test_rollback_uses_only_workflow_allowlisted_inputs() -> None:
+    sha = "a" * 40
+    target_sha = "b" * 40
+    run = DeploymentRun(project_id="p", release_candidate_id="current", environment_id="env", environment_name="staging", target_sha=sha, idempotency_key="run", initiated_by="actor")
+    target = ReleaseCandidate(project_id="p", delivery_candidate_id="dc", delivery_snapshot_id="ds", target_sha=target_sha, created_by="producer")
+    environment = DeploymentEnvironment(id="env", project_id="p", name="staging", display_name="Staging", remote_identifier="staging", last_healthy_release_id=target.id)
+    captured: dict[str, object] = {}
+
+    class DB:
+        async def fetch_one(self, *_args, **_kwargs):
+            return {"data": run.model_dump_json()}
+
+        async def execute(self, *_args, **_kwargs):
+            return None
+
+    class Adapter:
+        async def dispatch(self, _binding, _sha, *, inputs):
+            captured.update(inputs)
+            return {"accepted": True}
+
+    service = object.__new__(DeploymentService)
+    service.db = DB()
+    service.adapter = Adapter()
+
+    async def get_environment(_environment_id):
+        return environment
+
+    async def get_release(_release_id):
+        return target
+
+    async def get_binding(_environment_id):
+        return object()
+
+    service._environment = get_environment
+    service._release = get_release
+    service._binding = get_binding
+    execution = await service.rollback(run.id, initiated_by="operator")
+    assert execution.status == "succeeded"
+    assert captured == {"environment": "staging", "operation": "rollback"}

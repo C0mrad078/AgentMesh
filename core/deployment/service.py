@@ -197,7 +197,7 @@ class DeploymentService:
         execution = DeploymentRollbackExecution(rollback_plan_id=plan.id, initiated_by=initiated_by)
         binding = await self._binding(run.environment_id)
         try:
-            result = await self.adapter.dispatch(binding, target.target_sha, inputs={"environment": environment.name, "operation": "rollback", "rollback": "true", "rollback_from": run.target_sha})
+            result = await self.adapter.dispatch(binding, target.target_sha, inputs={"environment": environment.name, "operation": "rollback"})
             execution = execution.model_copy(update={"status": "succeeded", "post_verification_status": "pending", "provider_run_id": str(result.get("run_id")) if result.get("run_id") else None, "provider_run_url": result.get("url"), "completed_at": utc_now()})
         except Exception as exc:
             execution = execution.model_copy(update={"status": "failed", "error_message": sanitize(str(exc))[:500], "completed_at": utc_now()})

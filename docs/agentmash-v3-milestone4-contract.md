@@ -289,12 +289,11 @@ export interface RemoteRepositoryBindingInput {
   provider: "git" | "github";
   remote_name?: string; // default "origin"
   remote_url: string; // sanitized on backend
-  owner?: string | null;
-  repository?: string | null;
   target_branch?: string; // default "main"
   default_merge_method?: "squash" | "merge" | "rebase";
 }
 ```
+*Note: Authentication and branch protections are observed and verified directly by backend adapters, not trusted from client inputs.*
 
 #### `DeliveryCandidateSummary`
 ```typescript
@@ -342,14 +341,25 @@ export interface DeliveryCandidateDetail {
   approvals: DeliveryApproval[];
   pending_approvals: Array<"push" | "pr_create" | "pr_update" | "merge" | "rollback">;
   remote_operations: RemoteOperation[];
+  operations?: RemoteOperation[]; // alias for compatibility
   post_merge: PostMergeVerification | null;
-  rollback: RollbackPlan | null;
+  rollback_plan: RollbackPlan | null;
+  rollback?: RollbackPlan | null; // alias for compatibility
   telemetry: PhaseTelemetry[];
+  internal_steps: InternalStep[];
   recovery: DeliveryRecoveryState;
   diff_files: DiffFileEntry[];
   remote_sha: string | null;
 }
 ```
+
+#### CI Correction & Versioning Loop (`delivery.ci.assign_fix`)
+When a CI check fails:
+1. `delivery.ci.assign_fix` is called with `{ candidate_id, finding_id, agent_id? }`.
+2. The backend executes a correction cycle in an isolated worktree with worker implementation, Sentinel review, and local quality gates.
+3. Upon pass, a new version of `DeliveryCandidate` (and new `DeliverySnapshot`) is created with an incremented `version` number.
+4. The updated `CIFailureFinding` is returned.
+5. `delivery.candidate.list` will return all candidates/versions, allowing UI discovery of the new candidate version.
 
 ---
 
@@ -364,11 +374,12 @@ Strict boundary separation between workers:
   - `core/database/repositories/delivery_repo.py`
   - `core/security/allowlist.py` (add `DELIVERY_*` commands to `BridgeCommand`)
   - `core/bridge/handlers.py` (implement delivery handlers dispatching to `delivery_service`)
+  - `core/bridge/context.py` (authorized to wire `delivery_service` into `BridgeContext`)
   - `tests/python/test_delivery_*.py`
 - **Restrictions**:
   - Do NOT touch React UI components (`desktop/src/components/`, `desktop/src/pages/`, etc.).
   - Do NOT commit tokens or mock tokens in plain text.
-  - Do NOT perform unapproved remote pushes or destructive resets during tests.
+  - Do NOT perform real remote pushes, real PR creation, or destructive resets during development.
 
 ### Codex 2 — Delivery Center / UI
 - **Primary Directories & Modules**:

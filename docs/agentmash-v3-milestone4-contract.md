@@ -280,6 +280,77 @@ All commands are registered in `core.security.allowlist.BridgeCommand` and mappe
   - `{ event: "delivery.ci_updated", payload: { candidate_id, pr_number, checks_summary } }`
   - `{ event: "delivery.operation_progress", payload: { candidate_id, operation_id, status } }`
 
+### 4.1 Concrete Bridge DTO Specifications
+
+#### `RemoteRepositoryBindingInput`
+```typescript
+export interface RemoteRepositoryBindingInput {
+  project_id: string;
+  provider: "git" | "github";
+  remote_name?: string; // default "origin"
+  remote_url: string; // sanitized on backend
+  owner?: string | null;
+  repository?: string | null;
+  target_branch?: string; // default "main"
+  default_merge_method?: "squash" | "merge" | "rebase";
+}
+```
+
+#### `DeliveryCandidateSummary`
+```typescript
+export interface DeliveryCandidateSummary {
+  id: string;
+  mission_id: string;
+  project_id: string;
+  version: number;
+  status: DeliveryStatus;
+  base_sha: string;
+  integration_sha: string;
+  remote_sha: string | null;
+  pr_number: number | null;
+  pr_url: string | null;
+  risk_level: "low" | "medium" | "high" | "critical";
+  has_pending_approvals: boolean;
+  created_at: string;
+  updated_at: string;
+}
+```
+
+#### `DeliveryCandidateDetail`
+```typescript
+export interface DiffFileEntry {
+  path: string;
+  status: "added" | "modified" | "deleted";
+  additions: number;
+  deletions: number;
+}
+
+export interface DeliveryRecoveryState {
+  is_blocked: boolean;
+  recovery_reason: string | null;
+  suggested_action: "retry_preflight" | "request_approval" | "assign_ci_fix" | "revert_merge" | "human_intervention" | null;
+}
+
+export interface DeliveryCandidateDetail {
+  candidate: DeliveryCandidate;
+  snapshot: DeliverySnapshot;
+  remote_binding: RemoteRepositoryBinding | null;
+  preflight: PreflightReport | null;
+  pull_request: PullRequestRecord | null;
+  ci_runs: CIWorkflowRun[];
+  ci_findings: CIFailureFinding[];
+  approvals: DeliveryApproval[];
+  pending_approvals: Array<"push" | "pr_create" | "pr_update" | "merge" | "rollback">;
+  remote_operations: RemoteOperation[];
+  post_merge: PostMergeVerification | null;
+  rollback: RollbackPlan | null;
+  telemetry: PhaseTelemetry[];
+  recovery: DeliveryRecoveryState;
+  diff_files: DiffFileEntry[];
+  remote_sha: string | null;
+}
+```
+
 ---
 
 ## 5. File Ownership Matrix

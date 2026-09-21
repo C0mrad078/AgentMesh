@@ -74,7 +74,9 @@ class GitHubActionsAdapter:
     async def dispatch(self, binding: DeploymentBinding, sha: str, *, inputs: dict[str, str] | None = None) -> dict[str, Any]:
         if not re.fullmatch(r"[0-9a-fA-F]{40}", sha):
             raise ValidationError("Deployment SHA must be a verified commit")
-        status, body = await self._request("POST", f"/repos/{self._repo(binding)}/actions/workflows/{binding.workflow_file}/dispatches", json={"ref": sha, "inputs": inputs or {}})
+        dispatch_inputs = {"release_sha": sha, **(inputs or {})}
+        ref = dispatch_inputs.get("ref") or binding.target_branch or "main"
+        status, body = await self._request("POST", f"/repos/{self._repo(binding)}/actions/workflows/{binding.workflow_file}/dispatches", json={"ref": ref, "inputs": dispatch_inputs})
         if status != 204:
             raise ProviderError("GitHub workflow dispatch was not accepted")
         return {"accepted": True, "sha": sha.lower(), "workflow": binding.workflow_file}

@@ -1,4 +1,4 @@
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, useEffect } from "react";
 import { Loader2 } from "lucide-react";
 import { AppShell } from "@/layouts/AppShell";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
@@ -23,7 +23,10 @@ const OfficePage = lazy(() => import("@/pages/OfficePage").then((m) => ({ defaul
 
 const AgentWorkspacePage = lazy(() => import("@/pages/AgentWorkspacePage").then(m => ({ default: m.AgentWorkspacePage })));
 
+const DeliveryCenterPage = lazy(() => import("@/pages/DeliveryCenterPage").then(m => ({ default: m.DeliveryCenterPage })));
+
 const PAGES = {
+  delivery: DeliveryCenterPage,
   collaboration: AgentWorkspacePage,
   office: OfficePage,
   projects: ProjectsPage,
@@ -38,6 +41,7 @@ const PAGES = {
 };
 
 const PAGE_LABELS: Record<keyof typeof PAGES, string> = {
+  delivery: "Delivery Center",
   collaboration: "Agent Workspace",
   office: "Office",
   projects: "Projetos",
@@ -52,6 +56,13 @@ const PAGE_LABELS: Record<keyof typeof PAGES, string> = {
 };
 
 export default function App() {
+  // Native history routes: /delivery and /delivery/:candidateId.
+  useEffect(() => {
+    const sync = () => useUiStore.getState().syncLocation();
+    sync();
+    window.addEventListener('popstate', sync);
+    return () => window.removeEventListener('popstate', sync);
+  }, []);
   useBridgeSubscription();
   useOfficeDomainSync();
   const activePage = useUiStore((s) => s.activePage);

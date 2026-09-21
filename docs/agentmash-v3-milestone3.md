@@ -12,6 +12,12 @@ metadata. `core.integration.quality_gates` only proposes commands discovered
 from project files and rejects shell interpreters or paths outside the
 project. Execution remains a backend responsibility.
 
+Mission plans now carry an `ExecutionEnvelope`. The leader receives it before
+planning; the backend classifies implementation and control stages, executes
+ready workers in deterministic waves, and releases a completed worker lease
+before the next wave or a reviewer/integrator stage. Queued work therefore
+does not occupy slots or deadlock control Agents.
+
 Migration `0017_integration_control_center.sql` adds profiles and the
 auditable conflict, conflict-file, resolution-attempt, review and human
 decision records. `IntegrationRepository` exposes these records to the

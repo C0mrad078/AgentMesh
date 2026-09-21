@@ -316,6 +316,20 @@ class MissionService:
             max_review_cycles=self.max_review_rounds,
         )
 
+    async def load_execution_limits(self) -> None:
+        """Apply persisted operator limits before a plan is generated."""
+        raw = await self.ctx.settings_repo.get('parallel_limits', {})
+        if not isinstance(raw, dict):
+            return
+        current = self.parallel.limits
+        values = {}
+        for key in ('global_sessions', 'per_provider', 'per_binding', 'per_project', 'per_mission'):
+            value = raw.get(key)
+            if isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= 64:
+                values[key] = value
+        if values:
+            self.parallel.limits = type(current)(**{**current.__dict__, **values})
+
     @staticmethod
     def _task_kind(task: object) -> str:
         title = str(getattr(task, 'title', '')).lower()
@@ -508,6 +522,7 @@ class MissionService:
     async def analyze(self, mid: str) -> None:
         mission = await self.repo.get(Mission, mid)
         await self.status(mid, 'analyzing')
+        await self.load_execution_limits()
         envelope = self.execution_envelope()
         leader_choice = await self.choose(mission, 'leader')
         leader = await self.new_session(mission, leader_choice)

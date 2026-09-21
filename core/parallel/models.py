@@ -29,6 +29,18 @@ class ParallelTaskSpec(BaseModel):
     expected_artifacts: list[str] = Field(default_factory=list, max_length=20)
 
 
+class ExecutionEnvelope(BaseModel):
+    """The admission contract supplied to the leader and scheduler."""
+    max_workers: int = Field(default=2, ge=1, le=32)
+    max_implementation_tasks: int = Field(default=12, ge=1, le=100)
+    global_sessions: int = Field(default=4, ge=1, le=64)
+    provider_sessions: int = Field(default=2, ge=1, le=32)
+    mission_sessions: int = Field(default=3, ge=1, le=32)
+    reserved_control_slots: int = Field(default=1, ge=0, le=8)
+    max_review_cycles: int = Field(default=3, ge=1, le=8)
+    queue_policy: Literal["priority_fifo", "fifo"] = "priority_fifo"
+
+
 class WorktreeLease(BaseModel):
     id: str
     mission_id: str

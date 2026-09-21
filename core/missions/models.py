@@ -7,6 +7,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from core.parallel.models import ExecutionEnvelope
 from core.sessions.models import Session
 from core.tasks.models import Task
 
@@ -37,6 +38,7 @@ class PlannedTask(Contract):
     risk: Literal["low", "medium", "high", "critical"] = "medium"
     review_policy: Literal["required", "optional"] = "required"
     expected_artifacts: list[str] = Field(default_factory=list, max_length=20)
+    kind: Literal['implementation', 'review', 'integration', 'qa', 'control'] = 'implementation'
 
 
 class PlanOutput(Contract):
@@ -76,6 +78,7 @@ class MissionPlan(PlanOutput):
     leader_session_id: str
     choices: list[Choice]
     created_at: datetime
+    envelope: ExecutionEnvelope = Field(default_factory=ExecutionEnvelope)
 
 
 class Mission(Contract):

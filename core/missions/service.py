@@ -53,7 +53,13 @@ from core.missions.selection import choose_agent
 from core.orchestrator.event_bus import EventType, OrchestrationEvent
 from core.parallel.concurrency import ParallelConcurrency
 from core.parallel.forecast import forecast
-from core.parallel.models import ConcurrencyLease, HumanApproval, IntegrationAttempt, QualityGateRun
+from core.parallel.models import (
+    ConcurrencyLease,
+    ExecutionEnvelope,
+    HumanApproval,
+    IntegrationAttempt,
+    QualityGateRun,
+)
 from core.parallel.worktrees import WorktreeManager
 from core.runtime.execution_backend import ExecutionBackendType
 from core.security.secret_scanner import SecretScanner
@@ -298,6 +304,42 @@ class MissionService:
             project_id=mission.project_id, excluded=excluded or set(), busy=await self.busy(mission.id),
             required=required)
 
+    def execution_envelope(self) -> ExecutionEnvelope:
+        limits = self.parallel.limits
+        return ExecutionEnvelope(
+            max_workers=max(1, min(limits.per_mission, limits.per_project, limits.global_sessions - 1)),
+            max_implementation_tasks=12,
+            global_sessions=limits.global_sessions,
+            provider_sessions=limits.per_provider,
+            mission_sessions=limits.per_mission,
+            reserved_control_slots=1,
+            max_review_cycles=self.max_review_rounds,
+        )
+
+    @staticmethod
+    def _task_kind(task: object) -> str:
+        title = str(getattr(task, 'title', '')).lower()
+        capabilities = {str(value).lower() for value in getattr(task, 'capabilities', [])}
+        if capabilities and capabilities <= {'planning', 'architecture'}:
+            return 'control'
+        if any(word in title for word in ('integrat', 'merge', 'conflict')):
+            return 'integration'
+        if any(word in title for word in ('review', 'revis')):
+            return 'review'
+        if any(word in title for word in ('quality', 'qa', 'test', 'validat')):
+            return 'qa'
+        return 'implementation'
+
+    def normalize_plan(self, plan: PlanOutput, envelope: ExecutionEnvelope) -> PlanOutput:
+        """Mark system stages so they cannot consume worker leases."""
+        tasks = [task.model_copy(update={'kind': self._task_kind(task)}) for task in plan.tasks]
+        implementation_count = sum(task.kind == 'implementation' for task in tasks)
+        if implementation_count > envelope.max_implementation_tasks:
+            raise ValidationError(
+                f'Plano inviável: {implementation_count} tarefas de implementação excedem o limite '
+                f'{envelope.max_implementation_tasks}. Solicite uma única reformulação ao líder.')
+        return plan.model_copy(update={'tasks': tasks})
+
     async def new_session(self, mission: Mission, choice: Choice, task_id: str | None = None,
                           *, workspace: str | None = None, isolation: str = "main") -> Session:
         agent = await self.ctx.agents_repo.get(choice.agent_id)
@@ -466,6 +508,7 @@ class MissionService:
     async def analyze(self, mid: str) -> None:
         mission = await self.repo.get(Mission, mid)
         await self.status(mid, 'analyzing')
+        envelope = self.execution_envelope()
         leader_choice = await self.choose(mission, 'leader')
         leader = await self.new_session(mission, leader_choice)
         agents = await self.ctx.agents_repo.list()
@@ -487,15 +530,36 @@ class MissionService:
         plan = await self.turn(mid, leader,
             f'Analise o repositório e proponha tarefas para: {mission.request}\nInstruções adicionais: {extra}\n'
             f'Catálogo real: {json.dumps(catalog)}\n'
+            f'Execution Envelope obrigatório: {envelope.model_dump_json()}\n'
             'Use capacidades do catálogo. Inclua critérios verificáveis e dependências. '
-            'Não implemente agora. A implementação e a revisão serão atribuídas pelo backend.', PlanOutput)
-        required = sorted({c for t in plan.tasks for c in t.capabilities})
-        worker = await self.choose(mission, 'worker', {leader.agent_id}, required)
+            'Classifique cada etapa como implementation, review, integration, qa ou control. '
+            'Não crie etapas sistêmicas como workers. Não implemente agora. A implementação e a revisão serão atribuídas pelo backend.', PlanOutput)
+        plan = self.normalize_plan(plan, envelope)
+        # One bounded reformulation is safer than starting an impossible
+        # mission. The leader must produce at least one actual implementation
+        # task; control-only stages are handled by the backend.
+        if not any(task.kind == 'implementation' for task in plan.tasks):
+            plan = await self.turn(mid, leader,
+                'O plano anterior não continha uma tarefa de implementação elegível. '
+                'Reformule uma única vez com pelo menos duas tarefas implementation independentes, '
+                'sem criar tarefas de review, integração ou QA como workers.', PlanOutput)
+            plan = self.normalize_plan(plan, envelope)
+        required = sorted({c for t in plan.tasks if t.kind == 'implementation' for c in t.capabilities})
+        try:
+            worker = await self.choose(mission, 'worker', {leader.agent_id}, required)
+        except ValidationError as exc:
+            plan = await self.turn(mid, leader,
+                f'O plano é inviável para o catálogo/capacidade atual: {exc}. '
+                'Faça uma única reformulação: mantenha apenas tarefas implementation realizáveis '
+                'e deixe review, integração e QA para o scheduler.', PlanOutput)
+            plan = self.normalize_plan(plan, envelope)
+            required = sorted({c for t in plan.tasks if t.kind == 'implementation' for c in t.capabilities})
+            worker = await self.choose(mission, 'worker', {leader.agent_id}, required)
         reviewer = await self.choose(mission, 'reviewer', {leader.agent_id, worker.agent_id})
         versions = await self.repo.list(MissionPlan, mid)
         saved = MissionPlan(**plan.model_dump(), id=new_id('plan'), mission_id=mid,
             version=len(versions) + 1, leader_session_id=leader.id,
-            choices=[leader_choice, worker, reviewer], created_at=utc_now())
+            choices=[leader_choice, worker, reviewer], envelope=envelope, created_at=utc_now())
         await self.repo.put(saved)
         for instruction in await self.repo.list(Instruction, mid):
             if instruction.disposition in ('pending', 'replan'):
@@ -575,14 +639,20 @@ class MissionService:
         mid = mission.id
         workspace = Path(await self.workspace(mission))
         base_sha = await self.worktrees.base_sha(workspace)
-        pending = {task.key: task for task in plan.tasks}
-        completed: set[str] = set()
+        implementation = [task for task in plan.tasks if task.kind == 'implementation']
+        pending = {task.key: task for task in implementation}
+        # Review/integration/QA entries describe control stages and are not
+        # materialized as worker tasks. Their dependencies are satisfied by
+        # the scheduler itself after implementation tasks finish.
+        completed: set[str] = {task.key for task in plan.tasks if task.kind != 'implementation'}
+        wave_size = max(1, min(plan.envelope.max_workers, self.parallel.limits.per_mission))
         # The scheduler admits every currently-ready task at once; dependencies are
         # still enforced in deterministic waves.
         while pending:
             ready = sorted(k for k, task in pending.items() if set(task.depends_on) <= completed)
             if not ready:
                 raise MissionBlocked("Grafo paralelo não possui tarefa pronta; dependência inválida.")
+            ready = ready[:wave_size]
             choices: dict[str, Choice] = {}
             reserved = {leader.agent_id}
             for key in ready:
@@ -594,6 +664,9 @@ class MissionService:
                 for key in ready), return_exceptions=True)
             failures = [outcome for outcome in outcomes if isinstance(outcome, BaseException)]
             if failures:
+                for task in await self.repo.tasks.list_for_project(mission.project_id):
+                    if task.input.get('mission_id') == mid:
+                        await self.ctx.parallel_repo.release(mission_id=mid, task_id=task.id)
                 raise failures[0]
             completed.update(ready)
             for key in ready:
@@ -681,6 +754,9 @@ class MissionService:
                 await self.repo.sessions.update_status(worker.id, SessionStatus.COMPLETED, finished=True)
                 await self.repo.sessions.update_status(reviewer.id, SessionStatus.COMPLETED, finished=True)
                 await self.ctx.parallel_repo.update_worktree(wt.id, status='active', head_sha=head_sha)
+                # A completed worker no longer owns a provider/mission slot;
+                # control stages and queued waves must be admitted immediately.
+                await self.ctx.parallel_repo.release(mission_id=mid, task_id=task.id)
                 return
             if review.verdict == 'human_input_required':
                 raise HumanInputRequired(review.justification)

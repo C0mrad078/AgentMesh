@@ -352,7 +352,7 @@ async def test_deployment_full_run_and_rollback_bridge(ctx) -> None:
     }, ctx)
 
     # Mock deploy
-    async def fake_deploy(release_candidate_id, environment_id, initiated_by=None, idempotency_key=None):
+    async def fake_deploy(release_candidate_id, environment_id, initiated_by=None, idempotency_key=None, inputs=None, **kwargs):
         run = DeploymentRun(
             project_id=project_id,
             release_candidate_id=release_candidate_id,

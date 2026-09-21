@@ -1788,6 +1788,7 @@ async def _deployment_run_execute(params: dict[str, Any], ctx: BridgeContext) ->
         environment_id,
         initiated_by=params.get("actor_id") or "operator",
         idempotency_key=idempotency_key,
+        inputs=params.get("inputs"),
     )
 
     await ctx.event_bus.publish(OrchestrationEvent(
@@ -1927,6 +1928,7 @@ async def _deployment_promote_execute(params: dict[str, Any], ctx: BridgeContext
         promo.to_environment_id,
         initiated_by=params.get("actor_id") or promo.requested_by,
         idempotency_key=idempotency_key,
+        inputs=params.get("inputs"),
     )
 
     updated_promo = promo.model_copy(update={"status": "completed", "updated_at": utc_now()})

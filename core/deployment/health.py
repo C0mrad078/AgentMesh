@@ -17,6 +17,7 @@ class HealthChecker:
 
     async def check(self, profile: HealthCheckProfile, deployment_run_id: str) -> HealthCheckResult:
         last: HealthCheckResult | None = None
+        proc: asyncio.subprocess.Process | None = None
         for attempt in range(profile.max_retries + 1):
             started = time.monotonic()
             try:
@@ -34,6 +35,9 @@ class HealthChecker:
                 else:
                     raise ValueError("Unsupported health check type")
             except TimeoutError:
+                if proc is not None and proc.returncode is None:
+                    proc.kill()
+                    await proc.wait()
                 last = HealthCheckResult(deployment_run_id=deployment_run_id, profile_id=profile.id, status="timed_out", error_message="Health check timed out")
             except (httpx.HTTPError, OSError, ValueError) as exc:
                 last = HealthCheckResult(deployment_run_id=deployment_run_id, profile_id=profile.id, status="failed", error_message=sanitize(str(exc))[:300])

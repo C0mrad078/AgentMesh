@@ -6,6 +6,7 @@ from core.deployment.adapters.github_actions import GitHubActionsAdapter, saniti
 from core.deployment.health import HealthChecker
 from core.deployment.leases import LeaseManager
 from core.deployment.models import (
+    DeploymentApproval,
     DeploymentAttempt,
     DeploymentEnvironment,
     DeploymentOperation,
@@ -15,8 +16,9 @@ from core.deployment.models import (
     HealthCheckProfile,
     ReleaseCandidate,
 )
-from core.deployment.policies import validate_promotion_sha
+from core.deployment.policies import approvals_satisfied, requires_approval, validate_promotion_sha
 from core.deployment.recovery import reconcile_deployments
+from core.deployment.state_machine import assert_transition
 from core.utils.errors import NotFoundError, ValidationError
 from core.utils.time import utc_now
 
@@ -45,6 +47,19 @@ class DeploymentService:
     async def _release(self, release_id: str) -> ReleaseCandidate:
         return await self.repo.release(release_id)
 
+    async def _approvals(self, release_id: str, environment_id: str) -> list[DeploymentApproval]:
+        rows = await self.db.fetch_all("SELECT data FROM deployment_approvals WHERE release_candidate_id=? AND environment_id=?", (release_id, environment_id))
+        return [DeploymentApproval.model_validate_json(row["data"]) for row in rows]
+
+    async def _release_lease(self, environment_id: str) -> None:
+        lease = await self.leases.active(environment_id)
+        if lease is not None:
+            await self.leases.release(lease.lease_token)
+
+    async def _mark_environment_healthy(self, environment: DeploymentEnvironment, run: DeploymentRun) -> None:
+        updated = environment.model_copy(update={"current_release_id": run.release_candidate_id, "current_release_sha": run.target_sha, "last_healthy_release_id": run.release_candidate_id, "last_healthy_release_sha": run.target_sha, "observed_state": "healthy", "updated_at": utc_now()})
+        await self.repo.save_environment(updated)
+
     async def create_run(self, release_id: str, environment_id: str, *, initiated_by: str, idempotency_key: str) -> DeploymentRun:
         existing = await self.repo.run_by_idempotency(idempotency_key)
         if existing:
@@ -59,10 +74,17 @@ class DeploymentService:
 
     async def deploy(self, release_id: str, environment_id: str, *, initiated_by: str, idempotency_key: str, inputs: dict[str, str] | None = None) -> DeploymentRun:
         run = await self.create_run(release_id, environment_id, initiated_by=initiated_by, idempotency_key=idempotency_key)
-        if run.status in {"succeeded", "failed", "cancelled", "blocked"}:
+        if run.status != "pending":
             return run
         environment = await self._environment(environment_id)
         binding = await self._binding(environment_id)
+        release = await self._release(release_id)
+        policy = environment.approval_policy
+        approvals = await self._approvals(release_id, environment_id)
+        if requires_approval(environment.name, policy) and not approvals_satisfied(release=release, environment=environment.name, policy=policy, approvals=approvals):
+            raise ValidationError("Required deployment approval is not satisfied")
+        target_status = {"development": "deploying_development", "staging": "deploying_staging", "production": "deploying_production"}[environment.name]
+        assert_transition(release.status, target_status)  # type: ignore[arg-type]
         lease = await self.leases.acquire(environment_id, run.id, ttl_seconds=environment.timeout_seconds)
         if lease is None:
             blocked = run.model_copy(update={"status": "blocked", "error_message": "Environment is already leased", "updated_at": utc_now()})
@@ -86,9 +108,8 @@ class DeploymentService:
             safe = sanitize(str(exc))[:500]
             failed = run.model_copy(update={"status": "blocked", "error_message": safe, "updated_at": utc_now()})
             await self.repo.save_run(failed)
-            raise
-        finally:
             await self.leases.release(lease.lease_token)
+            raise
 
     async def poll(self, run_id: str) -> DeploymentRun:
         row = await self.db.fetch_one("SELECT data FROM deployment_runs WHERE id=?", (run_id,))
@@ -108,6 +129,10 @@ class DeploymentService:
             status = "blocked"
         result = run.model_copy(update={"status": status, "error_message": None if status in {"succeeded", "in_flight"} else "Remote provider state is unknown or did not verify the target SHA", "completed_at": utc_now() if status in {"succeeded", "failed", "cancelled", "blocked"} else None, "updated_at": utc_now()})
         await self.repo.save_run(result)
+        if status == "succeeded":
+            await self._mark_environment_healthy(await self._environment(run.environment_id), result)
+        if status in {"succeeded", "failed", "cancelled", "blocked"}:
+            await self._release_lease(run.environment_id)
         return result
 
     async def cancel(self, run_id: str) -> DeploymentRun:
@@ -117,9 +142,12 @@ class DeploymentService:
         run = DeploymentRun.model_validate_json(row["data"])
         binding = await self._binding(run.environment_id)
         if run.status in {"in_flight", "leased"}:
-            await self.adapter.cancel(binding, (await self.adapter.runs(binding, run.target_sha))[0]["id"])
+            runs = await self.adapter.runs(binding, run.target_sha)
+            if runs:
+                await self.adapter.cancel(binding, str(runs[0]["id"]))
         result = run.model_copy(update={"status": "cancelled", "completed_at": utc_now(), "updated_at": utc_now()})
         await self.repo.save_run(result)
+        await self._release_lease(run.environment_id)
         return result
 
     async def reconcile_after_restart(self, project_id: str | None = None):
@@ -131,7 +159,7 @@ class DeploymentService:
         target = await self._environment(to_environment_id)
         if source.project_id != target.project_id or release.project_id != target.project_id:
             raise ValidationError("Promotion resources belong to different projects")
-        if source.current_release_sha and source.current_release_sha.lower() != release.target_sha.lower():
+        if not source.current_release_sha or source.current_release_sha.lower() != release.target_sha.lower():
             raise ValidationError("Source environment does not contain the release SHA")
         validate_promotion_sha(release, release.target_sha)
         return await self.deploy(release_id, to_environment_id, initiated_by=initiated_by, idempotency_key=idempotency_key)

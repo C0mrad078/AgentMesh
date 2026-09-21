@@ -4,12 +4,14 @@ import type { TaskMode } from "@/types";
 // V3: collaboration is operational; Pixel Office remains a secondary view.
 export type AppPage =
   | "collaboration" | "office" | "projects" | "team" | "workspace" | "executions"
-  | "delivery" | "memory" | "providers" | "runtime-bindings" | "learning" | "settings";
+  | "delivery" | "deployment" | "memory" | "providers" | "runtime-bindings" | "learning" | "settings";
 
 interface UiState {
   activePage: AppPage;
   deliveryCandidateId: string | null;
+  deploymentReleaseId: string | null;
   openDelivery: (id?: string) => void;
+  openDeployment: (id?: string) => void;
   syncLocation: () => void;
   setActivePage: (page: AppPage) => void;
   newProjectDialogOpen: boolean;
@@ -27,21 +29,46 @@ function deliveryLocation() {
   catch { return { id: null }; }
 }
 
+function deploymentLocation() {
+  const match = window.location.pathname.match(/^\/deployment(?:\/([^/]+))?\/?$/);
+  if (!match) return null;
+  try { return { id: match[1] ? decodeURIComponent(match[1]) : null }; }
+  catch { return { id: null }; }
+}
+
+const initialDelivery = deliveryLocation();
+const initialDeployment = deploymentLocation();
+
 export const useUiStore = create<UiState>((set) => ({
-  activePage: deliveryLocation() ? "delivery" : "collaboration",
-  deliveryCandidateId: deliveryLocation()?.id ?? null,
+  activePage: initialDeployment ? "deployment" : initialDelivery ? "delivery" : "collaboration",
+  deliveryCandidateId: initialDelivery?.id ?? null,
+  deploymentReleaseId: initialDeployment?.id ?? null,
   openDelivery: (id) => {
     window.history.pushState({}, '', id ? `/delivery/${encodeURIComponent(id)}` : '/delivery');
-    set({ activePage: 'delivery', deliveryCandidateId: id ?? null });
+    set({ activePage: 'delivery', deliveryCandidateId: id ?? null, deploymentReleaseId: null });
+  },
+  openDeployment: (id) => {
+    window.history.pushState({}, '', id ? `/deployment/${encodeURIComponent(id)}` : '/deployment');
+    set({ activePage: 'deployment', deploymentReleaseId: id ?? null, deliveryCandidateId: null });
   },
   syncLocation: () => {
-    const route = deliveryLocation();
-    set({ activePage: route ? 'delivery' : 'collaboration', deliveryCandidateId: route?.id ?? null });
+    const depRoute = deploymentLocation();
+    if (depRoute) {
+      set({ activePage: 'deployment', deploymentReleaseId: depRoute.id ?? null, deliveryCandidateId: null });
+      return;
+    }
+    const delRoute = deliveryLocation();
+    if (delRoute) {
+      set({ activePage: 'delivery', deliveryCandidateId: delRoute.id ?? null, deploymentReleaseId: null });
+      return;
+    }
+    set({ activePage: 'collaboration', deliveryCandidateId: null, deploymentReleaseId: null });
   },
   setActivePage: (page) => {
     if (page === 'delivery') window.history.pushState({}, '', '/delivery');
-    else if (deliveryLocation()) window.history.pushState({}, '', '/');
-    set({ activePage: page, deliveryCandidateId: null });
+    else if (page === 'deployment') window.history.pushState({}, '', '/deployment');
+    else if (deliveryLocation() || deploymentLocation()) window.history.pushState({}, '', '/');
+    set({ activePage: page, deliveryCandidateId: null, deploymentReleaseId: null });
   },
   newProjectDialogOpen: false,
   setNewProjectDialogOpen: (open) => set({ newProjectDialogOpen: open }),

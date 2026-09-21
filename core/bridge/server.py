@@ -44,10 +44,15 @@ _LONG_DELIVERY_COMMANDS = frozenset({
     "delivery.pr.create", "delivery.pr.update", "delivery.merge.execute",
     "delivery.rollback.execute",
 })
+_LONG_DEPLOYMENT_COMMANDS = frozenset({
+    "deployment.predeploy.run", "deployment.run.execute",
+    "deployment.promote.execute", "deployment.rollback.execute",
+})
 
 
 def request_timeout_seconds(command: str) -> float:
-    return (_DELIVERY_REQUEST_TIMEOUT_SECONDS if command in _LONG_DELIVERY_COMMANDS
+    return (_DELIVERY_REQUEST_TIMEOUT_SECONDS
+            if command in _LONG_DELIVERY_COMMANDS or command in _LONG_DEPLOYMENT_COMMANDS
             else _REQUEST_TIMEOUT_SECONDS)
 
 

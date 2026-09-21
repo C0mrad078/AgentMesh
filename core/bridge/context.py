@@ -37,6 +37,7 @@ from core.database.repositories.agents_repo import AgentsRepository
 from core.database.repositories.audit_logs_repo import AuditLogsRepository
 from core.database.repositories.budgets_repo import BudgetsRepository
 from core.database.repositories.context_metrics_repo import ContextMetricsRepository
+from core.database.repositories.deployment_repo import DeploymentRepository
 from core.database.repositories.execution_events_repo import ExecutionEventsRepository
 from core.database.repositories.execution_steps_repo import ExecutionStepsRepository
 from core.database.repositories.executions_repo import ExecutionsRepository
@@ -76,6 +77,10 @@ from core.database.repositories.usage_metrics_repo import UsageMetricsRepository
 from core.database.repositories.user_feedback_repo import UserFeedbackRepository
 from core.database.repositories.worktrees_repo import WorktreesRepository
 from core.delivery.service import DeliveryService
+from core.deployment.adapters.github_actions import GitHubActionsAdapter
+from core.deployment.health import HealthChecker
+from core.deployment.orchestrator import DeploymentOrchestrator
+from core.deployment.service import DeploymentService
 from core.learning.context_optimizer import ContextOptimizer
 from core.learning.learning_engine import LearningEngine
 from core.learning.model_performance import ModelPerformanceTracker
@@ -192,6 +197,9 @@ class BridgeContext:
 
     mission_service: MissionService | None = None
     delivery_service: DeliveryService | None = None
+    deployment_repo: DeploymentRepository | None = None
+    deployment_service: DeploymentService | None = None
+    deployment_orchestrator: DeploymentOrchestrator | None = None
 
     async def close(self) -> None:
         if self.mission_service is not None:
@@ -453,5 +461,17 @@ async def build_context(
 
     context.mission_service = MissionService(context)
     context.delivery_service = DeliveryService(context)
+
+    import os
+    deployment_repo = DeploymentRepository(db)
+    gh_token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or "unconfigured"
+    gh_adapter = GitHubActionsAdapter(gh_token)
+    health_checker = HealthChecker()
+    deployment_service = DeploymentService(db, gh_adapter, health_checker=health_checker)
+    deployment_orchestrator = DeploymentOrchestrator(deployment_service)
+    context.deployment_repo = deployment_repo
+    context.deployment_service = deployment_service
+    context.deployment_orchestrator = deployment_orchestrator
+
     await context.mission_service.recover()
     return context

@@ -94,6 +94,7 @@ export function AgentWorkspacePage() {
         </select></label>
         <span role="status">Bridge: {connection}</span>
         <Button size="sm" variant="outline" onClick={() => useUiStore.getState().openDelivery()}>Delivery Center</Button>
+        <Button size="sm" variant="outline" onClick={() => useUiStore.getState().openDeployment()}>Deployment Center</Button>
         <Button size="sm" variant="outline" onClick={() => setPage('office')}>Pixel Office</Button>
         <Button size="sm" variant="outline" onClick={() => setPage('providers')}>Conexões</Button>
       </header>

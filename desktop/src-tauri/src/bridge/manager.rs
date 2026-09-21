@@ -52,9 +52,15 @@ const LONG_DELIVERY_COMMANDS: &[&str] = &[
     "delivery.merge.execute",
     "delivery.rollback.execute",
 ];
+const LONG_DEPLOYMENT_COMMANDS: &[&str] = &[
+    "deployment.predeploy.run",
+    "deployment.run.execute",
+    "deployment.promote.execute",
+    "deployment.rollback.execute",
+];
 
 pub fn request_timeout_for_command(command: &str) -> Duration {
-    if LONG_DELIVERY_COMMANDS.contains(&command) {
+    if LONG_DELIVERY_COMMANDS.contains(&command) || LONG_DEPLOYMENT_COMMANDS.contains(&command) {
         LONG_DELIVERY_REQUEST_TIMEOUT
     } else {
         REQUEST_TIMEOUT
@@ -426,14 +432,34 @@ mod tests {
 
     #[test]
     fn test_standard_commands_use_30s_timeout() {
-        assert_eq!(request_timeout_for_command("chat.send"), Duration::from_secs(30));
-        assert_eq!(request_timeout_for_command("delivery.candidate.list"), Duration::from_secs(30));
-        assert_eq!(request_timeout_for_command("delivery.remote.binding.get"), Duration::from_secs(30));
+        assert_eq!(
+            request_timeout_for_command("chat.send"),
+            Duration::from_secs(30)
+        );
+        assert_eq!(
+            request_timeout_for_command("delivery.candidate.list"),
+            Duration::from_secs(30)
+        );
+        assert_eq!(
+            request_timeout_for_command("delivery.remote.binding.get"),
+            Duration::from_secs(30)
+        );
     }
 
     #[test]
     fn test_long_delivery_commands_use_10830s_timeout() {
         for &cmd in LONG_DELIVERY_COMMANDS {
+            assert_eq!(
+                request_timeout_for_command(cmd),
+                Duration::from_secs(10830),
+                "command {cmd} should use long timeout"
+            );
+        }
+    }
+
+    #[test]
+    fn test_long_deployment_commands_use_10830s_timeout() {
+        for &cmd in LONG_DEPLOYMENT_COMMANDS {
             assert_eq!(
                 request_timeout_for_command(cmd),
                 Duration::from_secs(10830),
@@ -453,4 +479,3 @@ mod tests {
         assert_eq!(long_err, "Request timed out after 10830s.");
     }
 }
-

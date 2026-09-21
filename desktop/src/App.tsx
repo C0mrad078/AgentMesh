@@ -25,7 +25,10 @@ const AgentWorkspacePage = lazy(() => import("@/pages/AgentWorkspacePage").then(
 
 const DeliveryCenterPage = lazy(() => import("@/pages/DeliveryCenterPage").then(m => ({ default: m.DeliveryCenterPage })));
 
+const DeploymentCenterPage = lazy(() => import("@/pages/DeploymentCenterPage").then(m => ({ default: m.DeploymentCenterPage })));
+
 const PAGES = {
+  deployment: DeploymentCenterPage,
   delivery: DeliveryCenterPage,
   collaboration: AgentWorkspacePage,
   office: OfficePage,
@@ -41,6 +44,7 @@ const PAGES = {
 };
 
 const PAGE_LABELS: Record<keyof typeof PAGES, string> = {
+  deployment: "Deployment Center",
   delivery: "Delivery Center",
   collaboration: "Agent Workspace",
   office: "Office",

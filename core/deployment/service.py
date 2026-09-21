@@ -98,7 +98,11 @@ class DeploymentService:
             await self.repo.put(attempt)
             operation = DeploymentOperation(deployment_run_id=run.id, idempotency_key=f"{run.id}:dispatch", operation_type="dispatch_workflow", provider="github_actions", status="in_flight", request_payload_sanitized={"sha": run.target_sha, "workflow": binding.workflow_file})
             await self.repo.put(operation)
-            result = await self.adapter.dispatch(binding, run.target_sha, inputs=inputs)
+            dispatch_inputs = dict(inputs or {})
+            dispatch_inputs.setdefault("environment", environment.name)
+            dispatch_inputs.setdefault("operation", "deploy")
+            dispatch_inputs.setdefault("controlled_failure", "false")
+            result = await self.adapter.dispatch(binding, run.target_sha, inputs=dispatch_inputs)
             operation = operation.model_copy(update={"status": "succeeded", "response_payload_sanitized": sanitize(result), "updated_at": utc_now()})
             await self.repo.put(operation)
             run = run.model_copy(update={"status": "in_flight", "updated_at": utc_now()})
@@ -153,7 +157,7 @@ class DeploymentService:
     async def reconcile_after_restart(self, project_id: str | None = None):
         return await reconcile_deployments(self.db, project_id)
 
-    async def promote(self, release_id: str, from_environment_id: str, to_environment_id: str, *, initiated_by: str, idempotency_key: str) -> DeploymentRun:
+    async def promote(self, release_id: str, from_environment_id: str, to_environment_id: str, *, initiated_by: str, idempotency_key: str, inputs: dict[str, str] | None = None) -> DeploymentRun:
         release = await self._release(release_id)
         source = await self._environment(from_environment_id)
         target = await self._environment(to_environment_id)
@@ -162,7 +166,7 @@ class DeploymentService:
         if not source.current_release_sha or source.current_release_sha.lower() != release.target_sha.lower():
             raise ValidationError("Source environment does not contain the release SHA")
         validate_promotion_sha(release, release.target_sha)
-        return await self.deploy(release_id, to_environment_id, initiated_by=initiated_by, idempotency_key=idempotency_key)
+        return await self.deploy(release_id, to_environment_id, initiated_by=initiated_by, idempotency_key=idempotency_key, inputs=inputs)
 
     async def verify_health(self, run_id: str, profile: HealthCheckProfile):
         result = await self.health_checker.check(profile, run_id)
@@ -193,7 +197,7 @@ class DeploymentService:
         execution = DeploymentRollbackExecution(rollback_plan_id=plan.id, initiated_by=initiated_by)
         binding = await self._binding(run.environment_id)
         try:
-            result = await self.adapter.dispatch(binding, target.target_sha, inputs={"rollback": "true", "rollback_from": run.target_sha})
+            result = await self.adapter.dispatch(binding, target.target_sha, inputs={"environment": environment.name, "operation": "rollback", "rollback": "true", "rollback_from": run.target_sha})
             execution = execution.model_copy(update={"status": "succeeded", "post_verification_status": "pending", "provider_run_id": str(result.get("run_id")) if result.get("run_id") else None, "provider_run_url": result.get("url"), "completed_at": utc_now()})
         except Exception as exc:
             execution = execution.model_copy(update={"status": "failed", "error_message": sanitize(str(exc))[:500], "completed_at": utc_now()})

@@ -3,7 +3,12 @@ from __future__ import annotations
 import pytest
 from core.deployment.adapters.github_actions import sanitize
 from core.deployment.health import HealthChecker
-from core.deployment.models import DeploymentRun, HealthCheckProfile
+from core.deployment.models import (
+    DeploymentEnvironment,
+    DeploymentRun,
+    HealthCheckProfile,
+    ReleaseCandidate,
+)
 from core.deployment.service import DeploymentService
 
 
@@ -106,3 +111,30 @@ async def test_health_timeout_kills_local_process(monkeypatch) -> None:
     result = await HealthChecker().check(profile, "run")
     assert result.status == "timed_out"
     assert process.killed and process.waited
+
+
+@pytest.mark.asyncio
+async def test_promote_forwards_dispatch_inputs() -> None:
+    sha = "a" * 40
+    release = ReleaseCandidate(project_id="p", delivery_candidate_id="dc", delivery_snapshot_id="ds", target_sha=sha, created_by="producer", status="development_ready")
+    source = DeploymentEnvironment(id="source", project_id="p", name="development", display_name="Development", remote_identifier="dev", current_release_sha=sha)
+    target = DeploymentEnvironment(id="target", project_id="p", name="staging", display_name="Staging", remote_identifier="staging")
+    service = object.__new__(DeploymentService)
+
+    async def get_release(_release_id):
+        return release
+
+    async def get_environment(environment_id):
+        return source if environment_id == "source" else target
+
+    service._release = get_release
+    service._environment = get_environment
+    captured: dict[str, object] = {}
+
+    async def deploy(*_args, **kwargs):
+        captured.update(kwargs)
+        return DeploymentRun(project_id="p", release_candidate_id=release.id, environment_id="target", environment_name="staging", target_sha=sha, idempotency_key="key", initiated_by="actor")
+
+    service.deploy = deploy
+    await service.promote("release", "source", "target", initiated_by="actor", idempotency_key="key", inputs={"controlled_failure": "true"})
+    assert captured["inputs"] == {"controlled_failure": "true"}

@@ -42,6 +42,24 @@ use super::process::resolve_sidecar_command;
 use super::protocol::{ErrorPayload, IncomingMessage, RequestMessage};
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+const LONG_DELIVERY_REQUEST_TIMEOUT: Duration = Duration::from_secs(10830);
+const LONG_DELIVERY_COMMANDS: &[&str] = &[
+    "delivery.preflight.run",
+    "delivery.ci.assign_fix",
+    "delivery.remote.push",
+    "delivery.pr.create",
+    "delivery.pr.update",
+    "delivery.merge.execute",
+    "delivery.rollback.execute",
+];
+
+pub fn request_timeout_for_command(command: &str) -> Duration {
+    if LONG_DELIVERY_COMMANDS.contains(&command) {
+        LONG_DELIVERY_REQUEST_TIMEOUT
+    } else {
+        REQUEST_TIMEOUT
+    }
+}
 /// After this many consecutive failed attempts, status is reported as
 /// `Offline` rather than `Reconnecting` -- but the supervisor loop keeps
 /// retrying in the background regardless, at a fixed slower cadence.
@@ -342,6 +360,7 @@ impl BridgeManager {
         }
 
         let id = uuid::Uuid::new_v4().to_string();
+        let timeout = request_timeout_for_command(&command);
         let request = RequestMessage::new(id.clone(), self.session_token.clone(), command, params);
         let line = match serde_json::to_string(&request) {
             Ok(s) => s,
@@ -381,7 +400,7 @@ impl BridgeManager {
             inner.pending.insert(id.clone(), tx);
         }
 
-        match tokio::time::timeout(REQUEST_TIMEOUT, rx).await {
+        match tokio::time::timeout(timeout, rx).await {
             Ok(Ok(result)) => result,
             Ok(Err(_)) => Err(ErrorPayload {
                 code: "BRIDGE_DISCONNECTED".to_string(),
@@ -393,10 +412,45 @@ impl BridgeManager {
                 self.inner.lock().await.pending.remove(&id);
                 Err(ErrorPayload {
                     code: "TIMEOUT".to_string(),
-                    message: format!("Request timed out after {}s.", REQUEST_TIMEOUT.as_secs()),
+                    message: format!("Request timed out after {}s.", timeout.as_secs()),
                     details: Value::Null,
                 })
             }
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_standard_commands_use_30s_timeout() {
+        assert_eq!(request_timeout_for_command("chat.send"), Duration::from_secs(30));
+        assert_eq!(request_timeout_for_command("delivery.candidate.list"), Duration::from_secs(30));
+        assert_eq!(request_timeout_for_command("delivery.remote.binding.get"), Duration::from_secs(30));
+    }
+
+    #[test]
+    fn test_long_delivery_commands_use_10830s_timeout() {
+        for &cmd in LONG_DELIVERY_COMMANDS {
+            assert_eq!(
+                request_timeout_for_command(cmd),
+                Duration::from_secs(10830),
+                "command {cmd} should use long timeout"
+            );
+        }
+    }
+
+    #[test]
+    fn test_timeout_error_message_formatting() {
+        let std_timeout = request_timeout_for_command("delivery.candidate.list");
+        let std_err = format!("Request timed out after {}s.", std_timeout.as_secs());
+        assert_eq!(std_err, "Request timed out after 30s.");
+
+        let long_timeout = request_timeout_for_command("delivery.merge.execute");
+        let long_err = format!("Request timed out after {}s.", long_timeout.as_secs());
+        assert_eq!(long_err, "Request timed out after 10830s.");
+    }
+}
+

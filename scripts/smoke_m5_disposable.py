@@ -12,8 +12,6 @@ This script defines:
 from __future__ import annotations
 
 import argparse
-import asyncio
-import os
 import subprocess
 import sys
 from pathlib import Path

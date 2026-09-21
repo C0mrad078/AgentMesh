@@ -29,5 +29,13 @@ async def reconcile_deployments(db: Database, project_id: str | None = None) -> 
 
 
 async def mark_unknown_blocked(db: Database, run_id: str, reason: str = "Unknown provider state") -> bool:
-    cursor = await db.execute("UPDATE deployment_runs SET status='blocked',error_message=?,updated_at=? WHERE id=? AND status NOT IN ('succeeded','failed','cancelled','blocked')", (reason, utc_now().isoformat(), run_id))
+    row = await db.fetch_one("SELECT data FROM deployment_runs WHERE id=?", (run_id,))
+    data = json.loads(row["data"] or "{}") if row else {}
+    data["status"] = "blocked"
+    data["error_message"] = reason
+    now = utc_now().isoformat()
+    cursor = await db.execute(
+        "UPDATE deployment_runs SET status='blocked',data=?,updated_at=? WHERE id=? AND status NOT IN ('succeeded','failed','cancelled','blocked')",
+        (json.dumps(data), now, run_id),
+    )
     return cursor.rowcount == 1

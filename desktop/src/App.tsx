@@ -27,6 +27,10 @@ const DeliveryCenterPage = lazy(() => import("@/pages/DeliveryCenterPage").then(
 
 const DeploymentCenterPage = lazy(() => import("@/pages/DeploymentCenterPage").then(m => ({ default: m.DeploymentCenterPage })));
 
+const DiagnosticsCenterPage = lazy(() => import("@/pages/DiagnosticsCenterPage").then(m => ({ default: m.DiagnosticsCenterPage })));
+
+const OnboardingPage = lazy(() => import("@/pages/OnboardingPage").then(m => ({ default: m.OnboardingPage })));
+
 const PAGES = {
   deployment: DeploymentCenterPage,
   delivery: DeliveryCenterPage,
@@ -41,6 +45,8 @@ const PAGES = {
   "runtime-bindings": RuntimeBindingsPage,
   settings: SettingsPage,
   learning: LearningPage,
+  diagnostics: DiagnosticsCenterPage,
+  onboarding: OnboardingPage,
 };
 
 const PAGE_LABELS: Record<keyof typeof PAGES, string> = {
@@ -57,7 +63,10 @@ const PAGE_LABELS: Record<keyof typeof PAGES, string> = {
   "runtime-bindings": "Runtimes",
   settings: "Configurações",
   learning: "Aprendizado",
+  diagnostics: "Diagnostics Center",
+  onboarding: "Onboarding",
 };
+
 
 export default function App() {
   // Native history routes: /delivery and /delivery/:candidateId.

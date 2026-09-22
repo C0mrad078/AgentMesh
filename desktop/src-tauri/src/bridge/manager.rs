@@ -42,6 +42,8 @@ use super::process::resolve_sidecar_command;
 use super::protocol::{ErrorPayload, IncomingMessage, RequestMessage};
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+const MEDIUM_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
+const RESTORE_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 const LONG_DELIVERY_REQUEST_TIMEOUT: Duration = Duration::from_secs(10830);
 const LONG_DELIVERY_COMMANDS: &[&str] = &[
     "delivery.preflight.run",
@@ -60,12 +62,19 @@ const LONG_DEPLOYMENT_COMMANDS: &[&str] = &[
 ];
 
 pub fn request_timeout_for_command(command: &str) -> Duration {
-    if LONG_DELIVERY_COMMANDS.contains(&command) || LONG_DEPLOYMENT_COMMANDS.contains(&command) {
+    if command == "system.backup.restore" {
+        RESTORE_REQUEST_TIMEOUT
+    } else if command == "system.diagnostics.export" || command == "system.backup.create" {
+        MEDIUM_REQUEST_TIMEOUT
+    } else if LONG_DELIVERY_COMMANDS.contains(&command)
+        || LONG_DEPLOYMENT_COMMANDS.contains(&command)
+    {
         LONG_DELIVERY_REQUEST_TIMEOUT
     } else {
         REQUEST_TIMEOUT
     }
 }
+
 /// After this many consecutive failed attempts, status is reported as
 /// `Offline` rather than `Reconnecting` -- but the supervisor loop keeps
 /// retrying in the background regardless, at a fixed slower cadence.
@@ -443,6 +452,34 @@ mod tests {
         assert_eq!(
             request_timeout_for_command("delivery.remote.binding.get"),
             Duration::from_secs(30)
+        );
+        assert_eq!(
+            request_timeout_for_command("system.diagnostics.collect"),
+            Duration::from_secs(30)
+        );
+        assert_eq!(
+            request_timeout_for_command("system.backup.list"),
+            Duration::from_secs(30)
+        );
+        assert_eq!(
+            request_timeout_for_command("system.onboarding.status"),
+            Duration::from_secs(30)
+        );
+    }
+
+    #[test]
+    fn test_reliability_paired_timeouts() {
+        assert_eq!(
+            request_timeout_for_command("system.diagnostics.export"),
+            Duration::from_secs(60)
+        );
+        assert_eq!(
+            request_timeout_for_command("system.backup.create"),
+            Duration::from_secs(60)
+        );
+        assert_eq!(
+            request_timeout_for_command("system.backup.restore"),
+            Duration::from_secs(120)
         );
     }
 

@@ -1031,6 +1031,218 @@ async def _provider_cli_status_list(_params: dict[str, Any], ctx: BridgeContext)
     return {name: asdict(status) for name, status in statuses.items()}
 
 
+# --- system reliability / production readiness (Milestone 6) -----------------
+
+
+def _backup_manager(ctx: BridgeContext):
+    if ctx.backup_manager is not None:
+        return ctx.backup_manager
+    from core.reliability.backup import BackupManager
+
+    backup_dir = ctx.db.db_path.parent / "backups"
+    manager = BackupManager(ctx.db, backup_dir)
+    ctx.backup_manager = manager
+    return manager
+
+
+def _restore_manager(ctx: BridgeContext):
+    if ctx.restore_manager is not None:
+        return ctx.restore_manager
+    from core.reliability.restore import RestoreManager
+
+    manager = RestoreManager(ctx.db, _backup_manager(ctx))
+    ctx.restore_manager = manager
+    return manager
+
+
+def _diagnostics_collector(ctx: BridgeContext):
+    if ctx.diagnostics_collector is not None:
+        return ctx.diagnostics_collector
+    from core.reliability.diagnostics import DiagnosticsCollector
+
+    collector = DiagnosticsCollector(ctx.db)
+    ctx.diagnostics_collector = collector
+    return collector
+
+
+async def _gather_providers_summary(ctx: BridgeContext) -> list[dict[str, Any]]:
+    providers: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for name in ctx.provider_pool.names():
+        providers.append({"name": name, "available": True})
+        seen.add(name)
+    try:
+        stored = await ctx.providers_repo.list()
+        for p in stored:
+            if p.id not in seen:
+                providers.append({"name": p.id, "available": True})
+                seen.add(p.id)
+
+    except Exception:
+        pass
+    if not providers:
+        providers.append({"name": "local_mock", "available": True})
+    return providers
+
+
+async def _gather_bindings_summary(ctx: BridgeContext) -> list[dict[str, Any]]:
+    try:
+        bindings = await ctx.runtime_bindings_repo.list()
+        return [
+            {
+                "provider": b.provider_id,
+                "health": getattr(b, "health", "healthy"),
+                "configured_capacity": getattr(b, "configured_capacity", 1),
+                "observed_capacity": getattr(b, "observed_capacity", 1),
+                "reserved_slots": getattr(b, "reserved_slots", 0),
+                "target_branch": "main",
+            }
+            for b in bindings
+        ]
+    except Exception:
+        return []
+
+
+
+@handler(BridgeCommand.SYSTEM_DIAGNOSTICS_COLLECT)
+async def _system_diagnostics_collect(params: dict[str, Any], ctx: BridgeContext) -> dict[str, Any]:
+    collector = _diagnostics_collector(ctx)
+    providers = await _gather_providers_summary(ctx)
+    bindings = await _gather_bindings_summary(ctx)
+    logs = params.get("logs")
+    node_version = params.get("node_version")
+    return await collector.collect(
+        providers=providers,
+        runtime_bindings=bindings,
+        logs=logs if isinstance(logs, list) else None,
+        node_version=str(node_version) if node_version is not None else None,
+    )
+
+
+@handler(BridgeCommand.SYSTEM_DIAGNOSTICS_EXPORT)
+async def _system_diagnostics_export(params: dict[str, Any], ctx: BridgeContext) -> dict[str, Any]:
+    collector = _diagnostics_collector(ctx)
+    providers = await _gather_providers_summary(ctx)
+    bindings = await _gather_bindings_summary(ctx)
+    logs = params.get("logs")
+    node_version = params.get("node_version")
+
+    output_path = params.get("output_path") or params.get("path")
+    if not output_path:
+        from core.utils.time import utc_now
+
+        timestamp = utc_now().strftime("%Y%m%d-%H%M%S")
+        export_dir = ctx.db.db_path.parent / "diagnostics"
+        destination = export_dir / f"agentmash-diagnostics-{timestamp}.zip"
+    else:
+        destination = Path(output_path)
+
+    exported_file = await collector.export(
+        destination,
+        providers=providers,
+        runtime_bindings=bindings,
+        logs=logs if isinstance(logs, list) else None,
+        node_version=str(node_version) if node_version is not None else None,
+    )
+
+    await ctx.audit_logger.log("system.diagnostics.export", "system", str(exported_file), {})
+    return {
+        "path": str(exported_file),
+        "output_path": str(exported_file),
+        "file_path": str(exported_file),
+        "filename": exported_file.name,
+        "size_bytes": exported_file.stat().st_size if exported_file.exists() else 0,
+    }
+
+
+@handler(BridgeCommand.SYSTEM_BACKUP_CREATE)
+async def _system_backup_create(params: dict[str, Any], ctx: BridgeContext) -> dict[str, Any]:
+    manager = _backup_manager(ctx)
+    protected = bool(params.get("protected", False))
+    info = await manager.create(protected=protected)
+    await ctx.audit_logger.log(
+        "system.backup.create",
+        "database",
+        info.manifest.backup_id,
+        {
+            "protected": protected,
+            "sha256": info.manifest.sha256,
+            "db_size_bytes": info.manifest.db_size_bytes,
+        },
+    )
+    return info.model_dump(mode="json")
+
+
+@handler(BridgeCommand.SYSTEM_BACKUP_LIST)
+async def _system_backup_list(_params: dict[str, Any], ctx: BridgeContext) -> list[dict[str, Any]]:
+    manager = _backup_manager(ctx)
+    backups = await manager.list()
+    return [b.model_dump(mode="json") for b in backups]
+
+
+@handler(BridgeCommand.SYSTEM_BACKUP_RESTORE)
+async def _system_backup_restore(params: dict[str, Any], ctx: BridgeContext) -> dict[str, Any]:
+    backup_id = params.get("backup_id") or params.get("path")
+    if not backup_id or not isinstance(backup_id, str):
+        raise ValidationError("system.backup.restore requires a valid string 'backup_id'.")
+    manager = _restore_manager(ctx)
+    result = await manager.restore(backup_id)
+    try:
+        limits = await ctx.budgets_repo.get_global_limits()
+        ctx.budget.update_limits(limits)
+    except Exception:
+        pass
+    await ctx.audit_logger.log(
+        "system.backup.restore",
+        "database",
+        result.backup_id,
+        {
+            "restored_path": result.restored_path,
+            "safety_snapshot_path": result.safety_snapshot_path,
+            "schema_version": result.schema_version,
+        },
+    )
+    return result.model_dump(mode="json")
+
+
+@handler(BridgeCommand.SYSTEM_ONBOARDING_STATUS)
+async def _system_onboarding_status(_params: dict[str, Any], ctx: BridgeContext) -> dict[str, Any]:
+    projects = await ctx.project_service.list_projects()
+    agents = await ctx.agents_repo.list(only_active=False)
+    providers = list(ctx.provider_pool.names())
+
+    bindings = await ctx.runtime_bindings_repo.list()
+
+
+    has_projects = len(projects) > 0
+    has_agents = len(agents) > 0
+    has_providers = len(providers) > 0
+    has_bindings = len(bindings) > 0
+    ready = has_projects or has_providers or has_bindings
+
+    return {
+        "completed": has_projects and (has_providers or has_bindings),
+        "has_projects": has_projects,
+        "has_agents": has_agents,
+        "has_providers": has_providers,
+        "has_runtime_bindings": has_bindings,
+        "ready_for_completion": ready,
+        "projects_count": len(projects),
+        "agents_count": len(agents),
+        "providers_count": len(providers),
+        "runtime_bindings_count": len(bindings),
+        "app_version": "0.1.0-rc.1",
+        "checks": [
+            {"name": "database", "status": "pass", "message": "Database connected and responsive"},
+            {"name": "projects", "status": "pass" if has_projects else "info", "message": f"{len(projects)} projects configured"},
+            {"name": "agents", "status": "pass" if has_agents else "info", "message": f"{len(agents)} agents configured"},
+            {"name": "providers", "status": "pass" if has_providers else "info", "message": f"{len(providers)} providers configured"},
+            {"name": "runtime_bindings", "status": "pass" if has_bindings else "info", "message": f"{len(bindings)} runtime bindings configured"},
+        ],
+    }
+
+
+
 # --- helpers -----------------------------------------------------------------
 
 

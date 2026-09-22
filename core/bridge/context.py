@@ -125,6 +125,9 @@ from core.providers.health import ProviderHealthMonitor
 from core.providers.pool import ProviderPool
 from core.providers.provider_manager import ProviderManager
 from core.providers.registry import DEFAULT_MODELS, ModelRegistry
+from core.reliability.backup import BackupManager
+from core.reliability.diagnostics import DiagnosticsCollector
+from core.reliability.restore import RestoreManager
 from core.security.audit import AuditLogger
 from core.security.secret_store import SecretStore, create_secret_store
 from core.tasks.service import TaskService
@@ -200,6 +203,10 @@ class BridgeContext:
     deployment_repo: DeploymentRepository | None = None
     deployment_service: DeploymentService | None = None
     deployment_orchestrator: DeploymentOrchestrator | None = None
+    backup_manager: BackupManager | None = None
+    restore_manager: RestoreManager | None = None
+    diagnostics_collector: DiagnosticsCollector | None = None
+
 
     async def close(self) -> None:
         if self.mission_service is not None:
@@ -473,5 +480,14 @@ async def build_context(
     context.deployment_service = deployment_service
     context.deployment_orchestrator = deployment_orchestrator
 
+    backup_dir = Path(db_path).parent / "backups"
+    backup_manager = BackupManager(db, backup_dir)
+    restore_manager = RestoreManager(db, backup_manager)
+    diagnostics_collector = DiagnosticsCollector(db)
+    context.backup_manager = backup_manager
+    context.restore_manager = restore_manager
+    context.diagnostics_collector = diagnostics_collector
+
     await context.mission_service.recover()
+
     return context

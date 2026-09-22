@@ -35,6 +35,8 @@ from core.utils.logging import get_logger, log_event
 logger = get_logger("bridge.server")
 
 _REQUEST_TIMEOUT_SECONDS = 30.0
+_MEDIUM_REQUEST_TIMEOUT_SECONDS = 60.0
+_RESTORE_REQUEST_TIMEOUT_SECONDS = 120.0
 # Delivery gates and bounded worker/reviewer cycles can outlive an interactive
 # request. Each subprocess still has its own timeout; cancellation keeps a
 # durable recovery intent instead of blindly replaying remote mutations.
@@ -48,12 +50,24 @@ _LONG_DEPLOYMENT_COMMANDS = frozenset({
     "deployment.predeploy.run", "deployment.run.execute",
     "deployment.promote.execute", "deployment.rollback.execute",
 })
+_MEDIUM_TIMEOUT_COMMANDS = frozenset({
+    "system.diagnostics.export",
+    "system.backup.create",
+})
+_RESTORE_TIMEOUT_COMMANDS = frozenset({
+    "system.backup.restore",
+})
 
 
 def request_timeout_seconds(command: str) -> float:
-    return (_DELIVERY_REQUEST_TIMEOUT_SECONDS
-            if command in _LONG_DELIVERY_COMMANDS or command in _LONG_DEPLOYMENT_COMMANDS
-            else _REQUEST_TIMEOUT_SECONDS)
+    if command in _RESTORE_TIMEOUT_COMMANDS:
+        return _RESTORE_REQUEST_TIMEOUT_SECONDS
+    if command in _MEDIUM_TIMEOUT_COMMANDS:
+        return _MEDIUM_REQUEST_TIMEOUT_SECONDS
+    if command in _LONG_DELIVERY_COMMANDS or command in _LONG_DEPLOYMENT_COMMANDS:
+        return _DELIVERY_REQUEST_TIMEOUT_SECONDS
+    return _REQUEST_TIMEOUT_SECONDS
+
 
 
 def make_event_sink(transport: StdioTransport):

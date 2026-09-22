@@ -1,5 +1,5 @@
 import {
-  Building2, FolderKanban, Users, MessagesSquare, History, Brain, Plug, GraduationCap, Settings, Cpu,
+  Building2, FolderKanban, Users, MessagesSquare, History, Brain, Plug, GraduationCap, Settings, Cpu, Activity, Rocket,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useUiStore, type AppPage } from "@/stores/uiStore";
@@ -15,8 +15,11 @@ const NAV_ITEMS: { page: AppPage; label: string; icon: typeof Building2 }[] = [
   { page: "providers", label: "Providers", icon: Plug },
   { page: "runtime-bindings", label: "Runtimes", icon: Cpu },
   { page: "learning", label: "Aprendizado", icon: GraduationCap },
+  { page: "diagnostics", label: "Diagnósticos", icon: Activity },
+  { page: "onboarding", label: "Onboarding", icon: Rocket },
   { page: "settings", label: "Config.", icon: Settings },
 ];
+
 
 /**
  * AgentMash V2 (docs/agentmash-v2-migration.md): replaces the V1 fixed

@@ -4,7 +4,9 @@ import type { TaskMode } from "@/types";
 // V3: collaboration is operational; Pixel Office remains a secondary view.
 export type AppPage =
   | "collaboration" | "office" | "projects" | "team" | "workspace" | "executions"
-  | "delivery" | "deployment" | "memory" | "providers" | "runtime-bindings" | "learning" | "settings";
+  | "delivery" | "deployment" | "memory" | "providers" | "runtime-bindings" | "learning" | "settings"
+  | "diagnostics" | "onboarding";
+
 
 interface UiState {
   activePage: AppPage;

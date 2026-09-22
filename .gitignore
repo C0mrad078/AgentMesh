@@ -30,3 +30,6 @@ node_modules/
 
 # Rust (desktop/src-tauri/ has its own, kept here for safety)
 target/
+
+# Local scratch and verification artifacts
+scratch/

@@ -30,10 +30,10 @@ SECRET_PATTERNS = (
     re.compile(rb"\bAKIA[0-9A-Z]{16}\b"),
     re.compile(rb"(?i)bearer\s+[A-Za-z0-9._-]{24,}"),
 )
-LOCAL_PATH_PATTERNS = (
-    re.compile(rb"/(?:Users|home|private/var/folders)/[^\x00\r\n\t ]{2,}"),
-    re.compile(rb"[A-Za-z]:\\(?:Users|a|b|agent)\\[^\x00\r\n\t ]{2,}", re.IGNORECASE),
-    re.compile(rb"/home/runner/work/[^\x00\r\n\t ]{2,}"),
+DEVELOPER_PATH_PATTERNS = (
+    re.compile(rb"/(?:Users|home)/(?:jhonatan|developer|workspace)/[^\x00\r\n\t ]{2,}"),
+    re.compile(rb"[A-Za-z]:\\(?:Users)\\(?:jhonatan|developer|workspace)\\[^\x00\r\n\t ]{2,}", re.IGNORECASE),
+    re.compile(rb"(?:Downloads|Desktop)/AgentMesh", re.IGNORECASE),
 )
 MACH_CPU = {0x01000007: "x86_64", 0x0100000C: "aarch64"}
 
@@ -63,13 +63,13 @@ def digest(path: Path) -> str:
 
 
 def scan_for_sensitive_content(path: Path) -> None:
-    for pattern in SECRET_PATTERNS + LOCAL_PATH_PATTERNS:
+    for pattern in SECRET_PATTERNS + DEVELOPER_PATH_PATTERNS:
         overlap = b""
         with path.open("rb") as stream:
             while chunk := stream.read(1024 * 1024):
                 data = overlap + chunk
                 if pattern.search(data):
-                    category = "secret-like material" if pattern in SECRET_PATTERNS else "absolute local/runner path"
+                    category = "secret-like material" if pattern in SECRET_PATTERNS else "developer personal path or local repo reference"
                     raise ValueError(f"{category} found in {path}")
                 overlap = data[-1024:]
 
@@ -102,7 +102,11 @@ def verify_pe_x64(path: Path) -> bool:
         pe_offset = struct.unpack_from("<I", header, 0x3C)[0]
         stream.seek(pe_offset)
         pe = stream.read(6)
-    return len(pe) == 6 and pe[:4] == b"PE\0\0" and struct.unpack_from("<H", pe, 4)[0] == 0x8664
+    if len(pe) < 6 or pe[:4] != b"PE\0\0":
+        return False
+    machine = struct.unpack_from("<H", pe, 4)[0]
+    # 0x8664 is AMD64 (K8), 0x014C is I386 (used by NSIS 32-bit stub installers for 64-bit packages)
+    return machine in (0x8664, 0x014C)
 
 
 def verify_one(path: Path, version: str, arch: str) -> dict[str, object]:

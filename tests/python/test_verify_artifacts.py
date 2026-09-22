@@ -40,6 +40,11 @@ def test_scan_for_sensitive_content_detects_secrets(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="secret-like material"):
         scan_for_sensitive_content(secret_file)
 
+    dev_file = tmp_path / "dev.txt"
+    dev_file.write_text("File from /Users/jhonatan/work/project", encoding="utf-8")
+    with pytest.raises(ValueError, match="developer personal path"):
+        scan_for_sensitive_content(dev_file)
+
 
 def test_macho_and_pe_identification(tmp_path: Path) -> None:
     # 64-bit Mach-O little-endian magic 0xFEEDFACF with ARM64 CPU type 0x0100000C

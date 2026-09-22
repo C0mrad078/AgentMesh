@@ -1,0 +1,106 @@
+name: Release Candidate Packaging
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feat/v3-production-readiness
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Unsigned Internal RC (${{ matrix.label }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: macOS Apple Silicon
+            os: macos-15
+            target: aarch64-apple-darwin
+            arch: aarch64
+            bundles: app,dmg
+          - label: macOS Intel
+            os: macos-15-intel
+            target: x86_64-apple-darwin
+            arch: x86_64
+            bundles: app,dmg
+          - label: Windows x64 NSIS
+            os: windows-2025
+            target: x86_64-pc-windows-msvc
+            arch: x86_64
+            bundles: nsis
+    runs-on: ${{ matrix.os }}
+    concurrency:
+      group: rc-package-${{ github.ref }}-${{ matrix.target }}
+      cancel-in-progress: true
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Check Tauri Rust code
+        working-directory: desktop/src-tauri
+        run: |
+          cargo fmt -- --check
+          cargo check --target ${{ matrix.target }}
+          cargo clippy --all-targets --target ${{ matrix.target }} -- -D warnings
+
+      - name: Build static frontend and native bundle
+        run: npx tauri build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+        env:
+          # Deliberately unsigned until corporate signing secrets are provisioned.
+          TAURI_SIGNING_PRIVATE_KEY: ""
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+
+      - name: Verify macOS app and DMG
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          python ../scripts/verify_artifacts.py \
+            --artifact "src-tauri/target/${{ matrix.target }}/release/bundle/macos/Orquestrador.app" \
+            --artifact "src-tauri/target/${{ matrix.target }}/release/bundle/dmg/Orquestrador_0.1.0-rc.1_${{ matrix.arch == 'aarch64' && 'aarch64' || 'x64' }}.dmg" \
+            --version 0.1.0-rc.1 --arch "${{ matrix.arch }}" --classification "Unsigned Internal RC"
+
+      - name: Verify Windows NSIS installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: >-
+          python ../scripts/verify_artifacts.py
+          --artifact "src-tauri/target/${{ matrix.target }}/release/bundle/nsis/Orquestrador_0.1.0-rc.1_x64-setup.exe"
+          --version 0.1.0-rc.1 --arch x86_64 --classification "Unsigned Internal RC"
+
+      - name: Upload unsigned internal RC artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: orquestrador-0.1.0-rc.1-${{ matrix.target }}-unsigned-internal
+          path: |
+            desktop/src-tauri/target/${{ matrix.target }}/release/bundle/macos/Orquestrador.app
+            desktop/src-tauri/target/${{ matrix.target }}/release/bundle/dmg/Orquestrador_0.1.0-rc.1_*.dmg
+            desktop/src-tauri/target/${{ matrix.target }}/release/bundle/nsis/Orquestrador_0.1.0-rc.1_*setup.exe
+          if-no-files-found: error
+          retention-days: 14

@@ -1,6 +1,6 @@
 [package]
 name = "orquestrador"
-version = "0.1.0"
+version = "0.1.0-rc.1"
 description = "Orquestrador - autonomous multi-AI coordination desktop shell"
 authors = ["Orquestrador"]
 edition = "2021"
